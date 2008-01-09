@@ -1,0 +1,13 @@
+--- #YAML:1.0
+name:                Algorithm-LBFGS
+version:             0.01
+abstract:            Perl extension for L-BFGS 
+license:             perl
+generated_by:        ExtUtils::MakeMaker version 6.36
+distribution_type:   module
+requires:     
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
+    version: 1.2
+author:
+    - Laye Suen <laye@cpan.org>

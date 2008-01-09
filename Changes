@@ -1,0 +1,6 @@
+Revision history for Perl extension Algorithm::LBFGS.
+
+0.01  Tue Jan  8 15:31:18 2008
+	- original version; created by h2xs 1.23 with options
+		-An Algorithm::LBFGS
+

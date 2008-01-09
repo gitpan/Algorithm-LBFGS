@@ -1,0 +1,10 @@
+Changes
+lbfgs.c
+LBFGS.xs
+lib/Algorithm/LBFGS.pm
+Makefile.PL
+MANIFEST
+ppport.h
+README
+t/01-general.t
+META.yml                                 Module meta-data (added by MakeMaker)

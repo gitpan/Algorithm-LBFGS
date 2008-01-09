@@ -1,0 +1,130 @@
+NAME
+    Algorithm::LBFGS - Perl extension for L-BFGS (An unconstrained
+    optimization algorithm for large scale problems)
+
+SYNOPSIS
+      use Algorithm::LBFGS;
+  
+      # f(x) = x^2
+      sub f() {
+          my $x = shift;
+          return $x->[0] * $x->[0];
+      }
+
+      # grad f(x) = 2x
+      sub g() {
+          my $x = shift;
+          return [ 2 * $x->[0] ];
+      }
+
+      # minimize
+      my $xt = fmin($f, $g, [5]); # $xt = [0]
+
+DESCRIPTION
+    L-BFGS is a limited-memory quasi-Newton method for unconstrained
+    optimization. This method is especially efficient on problems involving
+    a large number of variables.
+
+    It solves a problem described as following:
+
+      min f(x), x = (x1, x2, ..., xn)
+
+    This module is a Perl port of its Fortran 77 version by Jorge Nocedal.
+
+    <http://www.ece.northwestern.edu/~nocedal/lbfgs.html>
+
+  fmin
+    "fmin(f, g, x0)" finds a vector "x" which minimize the function f(x).
+
+    * "f" - The reference to the f(x) function. This function is supposed to
+    accept an array reference (the vector of "x") and return a scalar (the
+    value f(x)).
+    * "g" - The reference to the "grad f(x)" function ("grad" for gradient).
+    This function is supposed to accept an array reference (the vector "x")
+    and return an array reference (the gradient vector at f(x)).
+    * "x0" - The initial value of "x". It is supposed to be an array
+    reference.
+
+    "fmin" returns the optimized "x" on success, otherwise returns "undef".
+
+  $Algorithm::LBFGS::m
+    "m" is an positive integer value that can be set by the user to the
+    number of corrections used in the BFGS update. Values of "m" less than 3
+    are not recommended; large values of "m" will result in excessive
+    computing time. "3 <= m >= 7" is recommended. The default value of "m"
+    is 5.
+
+  $Algorithm::LBFGS::xtol
+    "xtol" is a positive value that can be set by the user to an estimate of
+    the machine precision. The line search routine will terminate if the
+    relative width of the interval of uncertainty is less than "xtol". The
+    default value of "xtol" is equal to the "DBL_EPSILON" in float.h.
+
+  $Algorithm::LBFGS::eps
+    "eps" is a positive DOUBLE value that can be set by the user to
+    determine the accuracy with which the solution is to be found. The
+    subroutine terminates when
+
+      ||G|| < eps max(1,||X||)
+
+    where "||.||" denotes the Euclidean norm. The default value of "eps" is
+    equal to the "DBL_EPSILON" in float.h.
+
+  $Algorithm::LBFGS::gtol
+    "gtol" is a value with default value 0.9, which controls the accuracy of
+    the line search. If the f(x) and "grad f(x)" evaluations are inexpensive
+    with respect to the cost of the iteration (which is sometimes the case
+    when solving very large problems) it may be advantageous to set "gtol"
+    to a small value. A typical small value is 0.1. "gtol" should be greater
+    than 1E-04.
+
+  $Algorithm::LBFGS::stpmin and $Algorithm::LBFGS::stpmax
+    "stpmin" and "stpmax" are non-negative value which specify lower and
+    upper bounds for the step in the line search. Their default values are
+    1.D-20 and 1.D+20, respectively. These values need not be modified
+    unless the exponents are too large for the machine being used, or unless
+    the problem is extremely badly scaled (in which case the exponents
+    should be increased).
+
+  $Algorithm::LBFGS::iprt1 and $Algorithm::LBFGS::iprt2
+    "iprt1" and "iprt2" can be specified to control the output.
+
+    "iprt1" specifies the frequency of the output:
+
+    * "iprt1 < 0" : no output is generated,
+    * "iprt1 = 0" : output only at first and last iteration,
+    * "iprt1 > 0" : output every iterations.
+
+    "iprt2" specifies the type of output generated:
+
+    * "iprt2 = 0" : iteration count, number of function evaluations,
+    function value, norm of the gradient, and steplength,
+    * "iprt2 = 1" : same as "iprt2 = 0", plus vector of variables and
+    gradient vector at the initial point,
+    * "iprt2 = 2" : same as "iprt2 = 1", plus vector of variables,
+    * "iprt2 = 3" : same as "iprt2 = 2", plus gradient vector.
+
+    The default value of "iprt1" and "iprt2" is 1, 0 respectively.
+
+DEPENDENCY
+    To build the module, you need to install "libf2c" beforehand.
+
+SEE ALSO
+    PDL, PDL::Opt::NonLinear
+
+AUTHOR
+    Laye Suen, <laye@cpan.org>
+
+COPYRIGHT AND LICENSE
+    Copyright (C) 2008 by Laye Suen
+
+    This library is free software; you can redistribute it and/or modify it
+    under the same terms as Perl itself, either Perl version 5.8.8 or, at
+    your option, any later version of Perl 5 you may have available.
+
+REFERENCE
+    J. Nocedal. Updating Quasi-Newton Matrices with Limited Storage (1980) ,
+    Mathematics of Computation 35, pp. 773-782.
+    D.C. Liu and J. Nocedal. On the Limited Memory Method for Large Scale
+    Optimization (1989), Mathematical Programming B, 45, 3, pp. 503-528.
+
