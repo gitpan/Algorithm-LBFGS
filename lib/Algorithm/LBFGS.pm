@@ -8,24 +8,9 @@ require Exporter;
 
 our @ISA = qw(Exporter);
 
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
+our @EXPORT = qw(&fmin);
 
-# This allows declaration	use Algorithm::LBFGS ':all';
-# If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
-# will save memory.
-our %EXPORT_TAGS = ( 'all' => [ qw(
-    &fmin
-) ] );
-
-our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
-
-our @EXPORT = qw(
-    &fmin
-);
-
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 require XSLoader;
 XSLoader::load('Algorithm::LBFGS', $VERSION);
@@ -43,16 +28,18 @@ our $stpmax = 1e20;
 # subroutine: fmin
 sub fmin(@) {
     my ($f, $g, $x0, $diag) = @_;
-    # check if the input
-    return undef if ref $f ne 'CODE';
-    return undef if ref $g ne 'CODE';
-    return undef if ref $x0 ne 'ARRAY';
-    return undef if scalar(@$x0) == 0;
-    return undef if defined($diag) and ref $diag ne 'CODE';
+    # check the input
+    return undef if
+        ref $f ne 'CODE' or
+        ref $g ne 'CODE' or
+        ref $x0 ne 'ARRAY' or
+        scalar(@$x0) == 0 or
+        defined($diag) and ref $diag ne 'CODE';
     # initialize
     my $n = scalar(@$x0);
     my $diagco = defined($diag) ? 1 : 0;
     my $w = alloc_workspace($n, $m);
+    return undef if not $w; # fail to allocate workspace
     my $x = $x0;
     set_gtol($gtol);
     set_stpmin($stpmin);
@@ -71,7 +58,6 @@ sub fmin(@) {
 
 1;
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 NAME
 
@@ -94,7 +80,7 @@ Algorithm::LBFGS - Perl extension for L-BFGS
   }
 
   # minimize
-  my $xt = fmin($f, $g, [5]); # $xt = [0]
+  my $xt = fmin(\&f, \&g, [5]); # $xt = [0]
 
 =head1 DESCRIPTION
 
@@ -124,10 +110,11 @@ value C<f(x)>).
 =item *
 C<g> - The reference to the C<grad f(x)> function (C<grad> for gradient).
 This function is supposed to accept an array reference (the vector C<x>) and
-return an array reference (the gradient vector at C<f(x)>).
+return an array reference (the gradient vector of C<f> at C<x>).
 
 =item *
 C<x0> - The initial value of C<x>. It is supposed to be an array reference.
+The final result may depend on your choice of the initial C<x>.
 
 =back
 
@@ -138,7 +125,7 @@ C<fmin> returns the optimized C<x> on success, otherwise returns C<undef>.
 C<m> is an positive integer value that can be set by the user to the number
 of corrections used in the BFGS update. Values of C<m> less than 3 are not 
 recommended; large values of C<m> will result in excessive computing time.
-C<3 E<lt>= m E<gt>= 7> is recommended. The default value of C<m> is 5.
+C<3 E<lt>= m E<lt>= 7> is recommended. The default value of C<m> is 5.
 
 =head2 $Algorithm::LBFGS::xtol
 
@@ -150,12 +137,12 @@ The default value of C<xtol> is equal to the C<DBL_EPSILON> in F<float.h>.
 =head2 $Algorithm::LBFGS::eps
 
 C<eps> is a positive DOUBLE value that can be set by the user to determine
-the accuracy with which the solution is to be found. The subroutine terminates
-when
+the accuracy with which the solution is to be found. The subroutine terminates when
 
   ||G|| < eps max(1,||X||)
 
 where C<||.||> denotes the Euclidean norm.
+
 The default value of C<eps> is equal to the C<DBL_EPSILON> in F<float.h>.
 
 =head2 $Algorithm::LBFGS::gtol

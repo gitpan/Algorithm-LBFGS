@@ -1,6 +1,5 @@
 NAME
-    Algorithm::LBFGS - Perl extension for L-BFGS (An unconstrained
-    optimization algorithm for large scale problems)
+    Algorithm::LBFGS - Perl extension for L-BFGS
 
 SYNOPSIS
       use Algorithm::LBFGS;
@@ -18,7 +17,7 @@ SYNOPSIS
       }
 
       # minimize
-      my $xt = fmin($f, $g, [5]); # $xt = [0]
+      my $xt = fmin(\&f, \&g, [5]); # $xt = [0]
 
 DESCRIPTION
     L-BFGS is a limited-memory quasi-Newton method for unconstrained
@@ -41,9 +40,10 @@ DESCRIPTION
     value f(x)).
     * "g" - The reference to the "grad f(x)" function ("grad" for gradient).
     This function is supposed to accept an array reference (the vector "x")
-    and return an array reference (the gradient vector at f(x)).
+    and return an array reference (the gradient vector of "f" at "x").
     * "x0" - The initial value of "x". It is supposed to be an array
-    reference.
+    reference. The final result may depend on your choice of the initial
+    "x".
 
     "fmin" returns the optimized "x" on success, otherwise returns "undef".
 
@@ -51,7 +51,7 @@ DESCRIPTION
     "m" is an positive integer value that can be set by the user to the
     number of corrections used in the BFGS update. Values of "m" less than 3
     are not recommended; large values of "m" will result in excessive
-    computing time. "3 <= m >= 7" is recommended. The default value of "m"
+    computing time. "3 <= m <= 7" is recommended. The default value of "m"
     is 5.
 
   $Algorithm::LBFGS::xtol
@@ -67,8 +67,9 @@ DESCRIPTION
 
       ||G|| < eps max(1,||X||)
 
-    where "||.||" denotes the Euclidean norm. The default value of "eps" is
-    equal to the "DBL_EPSILON" in float.h.
+    where "||.||" denotes the Euclidean norm.
+
+    The default value of "eps" is equal to the "DBL_EPSILON" in float.h.
 
   $Algorithm::LBFGS::gtol
     "gtol" is a value with default value 0.9, which controls the accuracy of
