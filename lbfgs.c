@@ -1,1635 +1,1100 @@
-/* lbfgs.f -- translated by f2c (version 20050501).
-   You must link the resulting object file with libf2c:
-	on Microsoft Windows system, link with libf2c.lib;
-	on Linux or Unix systems, link with .../path/to/libf2c.a -lm
-	or, if you install libf2c.a in a standard place, with -lf2c -lm
-	-- in that order, at the end of the command line, as in
-		cc *.o -lf2c -lm
-	Source for libf2c is in /netlib/f2c/libf2c.zip, e.g.,
+/*
+ *      Limited memory BFGS (L-BFGS).
+ *
+ * Copyright (c) 1990, Jorge Nocedal
+ * Copyright (c) 2007, Naoaki Okazaki
+ * All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 
-		http://www.netlib.org/f2c/libf2c.zip
+/* $Id: lbfgs.c 56 2007-12-16 08:01:47Z naoaki $ */
+
+/*
+This library is a C port of the FORTRAN implementation of Limited-memory
+Broyden-Fletcher-Goldfarb-Shanno (L-BFGS) method written by Jorge Nocedal.
+The original FORTRAN source code is available at:
+http://www.ece.northwestern.edu/~nocedal/lbfgs.html
+
+The L-BFGS algorithm is described in:
+	- Jorge Nocedal.
+	  Updating Quasi-Newton Matrices with Limited Storage.
+	  <i>Mathematics of Computation</i>, Vol. 35, No. 151, pp. 773--782, 1980.
+	- Dong C. Liu and Jorge Nocedal.
+	  On the limited memory BFGS method for large scale optimization.
+	  <i>Mathematical Programming</i> B, Vol. 45, No. 3, pp. 503-528, 1989.
+
+The line search algorithms used in this implementation are described in:
+	- John E. Dennis and Robert B. Schnabel.
+	  <i>Numerical Methods for Unconstrained Optimization and Nonlinear
+	  Equations</i>, Englewood Cliffs, 1983.
+	- Jorge J. More and David J. Thuente.
+	  Line search algorithm with guaranteed sufficient decrease.
+	  <i>ACM Transactions on Mathematical Software (TOMS)</i>, Vol. 20, No. 3,
+	  pp. 286-307, 1994.
+
+This library also implements Orthant-Wise Limited-memory Quasi-Newton (OW-LQN)
+method presented in:
+	- Galen Andrew and Jianfeng Gao.
+	  Scalable training of L1-regularized log-linear models.
+	  In <i>Proceedings of the 24th International Conference on Machine
+	  Learning (ICML 2007)</i>, pp. 33-40, 2007.
+
+I would like to thank the original author, Jorge Nocedal, who has been
+distributing the effieicnt and explanatory implementation in an open source
+licence.
 */
 
-#include "f2c.h"
+#ifdef	HAVE_CONFIG_H
+#include <config.h>
+#endif/*HAVE_CONFIG_H*/
 
-/* Common Block Declarations */
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
 
-struct lb3_1_ {
-    integer mp, lp;
-    doublereal gtol, stpmin, stpmax;
+#include <lbfgs.h>
+
+#ifdef	_MSC_VER
+#define	inline	__inline
+typedef unsigned int uint32_t;
+#endif/*_MSC_VER*/
+
+#if	defined(USE_SSE) && defined(__SSE__) && LBFGS_FLOAT == 32
+/* Use SSE optimization for 32bit float precision. */
+#include "arithmetic_sse_float.h"
+
+#elif	defined(USE_SSE) && defined(__SSE__) && LBFGS_FLOAT == 64
+/* Use SSE2 optimization for 64bit double precision. */
+#include "arithmetic_sse_double.h"
+
+#else
+/* No CPU specific optimization. */
+#include "arithmetic_ansi.h"
+
+#endif
+
+#define min2(a, b)		((a) <= (b) ? (a) : (b))
+#define max2(a, b)		((a) >= (b) ? (a) : (b))
+#define	max3(a, b, c)	max2(max2((a), (b)), (c));
+
+struct tag_iteration_data {
+	lbfgsfloatval_t alpha;
+	lbfgsfloatval_t *s;		/* [n] */
+	lbfgsfloatval_t *y;		/* [n] */
+	lbfgsfloatval_t ys;		/* vecdot(y, s) */
+};
+typedef struct tag_iteration_data iteration_data_t;
+
+static const lbfgs_parameter_t _defparam = {
+	6, 1e-5, 0, 20,
+	1e-20, 1e20, 1e-4, 0.9, 1.0e-16,
+	0.0,
 };
 
-#define lb3_1 (*(struct lb3_1_ *) &lb3_)
+/* Forward function declarations. */
 
-/* Initialized data */
+static int line_search_backtracking(
+	int n,
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *f,
+	lbfgsfloatval_t *g,
+	lbfgsfloatval_t *s,
+	lbfgsfloatval_t *stp,
+	lbfgsfloatval_t *wa,
+	lbfgs_evaluate_t proc_evaluate,
+	void *instance,
+	const lbfgs_parameter_t *param
+	);
 
-struct {
-    integer e_1[2];
-    doublereal e_2[3];
-    } lb3_ = { 6, 6, .9, 1e-20, 1e20 };
+static int line_search(
+	int n,
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *f,
+	lbfgsfloatval_t *g,
+	lbfgsfloatval_t *s,
+	lbfgsfloatval_t *stp,
+	lbfgsfloatval_t *wa,
+	lbfgs_evaluate_t proc_evaluate,
+	void *instance,
+	const lbfgs_parameter_t *param
+	);
+
+static int update_trial_interval(
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *fx,
+	lbfgsfloatval_t *dx,
+	lbfgsfloatval_t *y,
+	lbfgsfloatval_t *fy,
+	lbfgsfloatval_t *dy,
+	lbfgsfloatval_t *t,
+	lbfgsfloatval_t *ft,
+	lbfgsfloatval_t *dt,
+	const lbfgsfloatval_t tmin,
+	const lbfgsfloatval_t tmax,
+	int *brackt
+	);
 
 
-/* Table of constant values */
 
-static integer c__1 = 1;
 
-/*     ---------------------------------------------------------------------- */
-/*     This file contains the LBFGS algorithm and supporting routines */
-
-/*     **************** */
-/*     LBFGS SUBROUTINE */
-/*     **************** */
-
-/* Subroutine */ int lbfgs_(integer *n, integer *m, doublereal *x, doublereal 
-	*f, doublereal *g, logical *diagco, doublereal *diag, integer *iprint,
-	 doublereal *eps, doublereal *xtol, doublereal *w, integer *iflag)
+void lbfgs_parameter_init(lbfgs_parameter_t *param)
 {
-    /* Initialized data */
-
-    static doublereal one = 1.;
-    static doublereal zero = 0.;
-
-    /* Format strings */
-    static char fmt_245[] = "(/\002  GTOL IS LESS THAN OR EQUAL TO 1.D-04"
-	    "\002,/\002 IT HAS BEEN RESET TO 9.D-01\002)";
-    static char fmt_200[] = "(/\002 IFLAG= -1 \002,/\002 LINE SEARCH FAILED."
-	    " SEE DOCUMENTATION OF ROUTINE MCSRCH\002,/\002 ERROR RETURN"
-	    "\002\002 OF LINE SEARCH: INFO= \002,i2,/\002 POSSIBLE CAUSES: FU"
-	    "NCTION OR GRADIENT ARE INCORRECT\002,/\002 OR INCORRECT TOLERANC"
-	    "ES\002)";
-    static char fmt_235[] = "(/\002 IFLAG= -2\002,/\002 THE\002,i5,\002-TH D"
-	    "IAGONAL ELEMENT OF THE\002,/,\002 INVERSE HESSIAN APPROXIMATION "
-	    "IS NOT POSITIVE\002)";
-    static char fmt_240[] = "(/\002 IFLAG= -3\002,/\002 IMPROPER INPUT PARAM"
-	    "ETERS (N OR M\002,\002 ARE NOT POSITIVE)\002)";
-
-    /* System generated locals */
-    integer i__1;
-    doublereal d__1;
-
-    /* Builtin functions */
-    integer s_wsfe(cilist *), e_wsfe(void);
-    double sqrt(doublereal);
-    integer do_fio(integer *, char *, ftnlen);
-
-    /* Local variables */
-    static integer i__, cp;
-    static doublereal sq, yr, ys, yy;
-    extern /* Subroutine */ int lb1_(integer *, integer *, integer *, 
-	    doublereal *, integer *, integer *, doublereal *, doublereal *, 
-	    doublereal *, doublereal *, logical *);
-    static integer npt;
-    static doublereal stp, stp1, beta;
-    static integer inmc;
-    extern doublereal ddot_(integer *, doublereal *, integer *, doublereal *, 
-	    integer *);
-    static integer info, iscn, nfev, iycn, iter;
-    static doublereal ftol;
-    static integer nfun, ispt, iypt, bound;
-    static doublereal gnorm;
-    extern /* Subroutine */ int daxpy_(integer *, doublereal *, doublereal *, 
-	    integer *, doublereal *, integer *);
-    static integer point;
-    static doublereal xnorm;
-    extern /* Subroutine */ int mcsrch_(integer *, doublereal *, doublereal *,
-	     doublereal *, doublereal *, doublereal *, doublereal *, 
-	    doublereal *, integer *, integer *, integer *, doublereal *);
-    static logical finish;
-    static integer maxfev;
-
-    /* Fortran I/O blocks */
-    static cilist io___4 = { 0, 0, 0, fmt_245, 0 };
-    static cilist io___30 = { 0, 0, 0, fmt_200, 0 };
-    static cilist io___31 = { 0, 0, 0, fmt_235, 0 };
-    static cilist io___32 = { 0, 0, 0, fmt_240, 0 };
-
-
-
-
-/*        LIMITED MEMORY BFGS METHOD FOR LARGE SCALE OPTIMIZATION */
-/*                          JORGE NOCEDAL */
-/*                        *** July 1990 *** */
-
-
-/*     This subroutine solves the unconstrained minimization problem */
-
-/*                      min F(x),    x= (x1,x2,...,xN), */
-
-/*      using the limited memory BFGS method. The routine is especially */
-/*      effective on problems involving a large number of variables. In */
-/*      a typical iteration of this method an approximation Hk to the */
-/*      inverse of the Hessian is obtained by applying M BFGS updates to */
-/*      a diagonal matrix Hk0, using information from the previous M steps. */
-/*      The user specifies the number M, which determines the amount of */
-/*      storage required by the routine. The user may also provide the */
-/*      diagonal matrices Hk0 if not satisfied with the default choice. */
-/*      The algorithm is described in "On the limited memory BFGS method */
-/*      for large scale optimization", by D. Liu and J. Nocedal, */
-/*      Mathematical Programming B 45 (1989) 503-528. */
-
-/*      The user is required to calculate the function value F and its */
-/*      gradient G. In order to allow the user complete control over */
-/*      these computations, reverse  communication is used. The routine */
-/*      must be called repeatedly under the control of the parameter */
-/*      IFLAG. */
-
-/*      The steplength is determined at each iteration by means of the */
-/*      line search routine MCVSRCH, which is a slight modification of */
-/*      the routine CSRCH written by More' and Thuente. */
-
-/*      The calling statement is */
-
-/*          CALL LBFGS(N,M,X,F,G,DIAGCO,DIAG,IPRINT,EPS,XTOL,W,IFLAG) */
-
-/*      where */
-
-/*     N       is an INTEGER variable that must be set by the user to the */
-/*             number of variables. It is not altered by the routine. */
-/*             Restriction: N>0. */
-
-/*     M       is an INTEGER variable that must be set by the user to */
-/*             the number of corrections used in the BFGS update. It */
-/*             is not altered by the routine. Values of M less than 3 are */
-/*             not recommended; large values of M will result in excessive */
-/*             computing time. 3<= M <=7 is recommended. Restriction: M>0. */
-
-/*     X       is a DOUBLE PRECISION array of length N. On initial entry */
-/*             it must be set by the user to the values of the initial */
-/*             estimate of the solution vector. On exit with IFLAG=0, it */
-/*             contains the values of the variables at the best point */
-/*             found (usually a solution). */
-
-/*     F       is a DOUBLE PRECISION variable. Before initial entry and on */
-/*             a re-entry with IFLAG=1, it must be set by the user to */
-/*             contain the value of the function F at the point X. */
-
-/*     G       is a DOUBLE PRECISION array of length N. Before initial */
-/*             entry and on a re-entry with IFLAG=1, it must be set by */
-/*             the user to contain the components of the gradient G at */
-/*             the point X. */
-
-/*     DIAGCO  is a LOGICAL variable that must be set to .TRUE. if the */
-/*             user  wishes to provide the diagonal matrix Hk0 at each */
-/*             iteration. Otherwise it should be set to .FALSE., in which */
-/*             case  LBFGS will use a default value described below. If */
-/*             DIAGCO is set to .TRUE. the routine will return at each */
-/*             iteration of the algorithm with IFLAG=2, and the diagonal */
-/*              matrix Hk0  must be provided in the array DIAG. */
-
-
-/*     DIAG    is a DOUBLE PRECISION array of length N. If DIAGCO=.TRUE., */
-/*             then on initial entry or on re-entry with IFLAG=2, DIAG */
-/*             it must be set by the user to contain the values of the */
-/*             diagonal matrix Hk0.  Restriction: all elements of DIAG */
-/*             must be positive. */
-
-/*     IPRINT  is an INTEGER array of length two which must be set by the */
-/*             user. */
-
-/*             IPRINT(1) specifies the frequency of the output: */
-/*                IPRINT(1) < 0 : no output is generated, */
-/*                IPRINT(1) = 0 : output only at first and last iteration, */
-/*                IPRINT(1) > 0 : output every IPRINT(1) iterations. */
-
-/*             IPRINT(2) specifies the type of output generated: */
-/*                IPRINT(2) = 0 : iteration count, number of function */
-/*                                evaluations, function value, norm of the */
-/*                                gradient, and steplength, */
-/*                IPRINT(2) = 1 : same as IPRINT(2)=0, plus vector of */
-/*                                variables and  gradient vector at the */
-/*                                initial point, */
-/*                IPRINT(2) = 2 : same as IPRINT(2)=1, plus vector of */
-/*                                variables, */
-/*                IPRINT(2) = 3 : same as IPRINT(2)=2, plus gradient vector. */
-
-
-/*     EPS     is a positive DOUBLE PRECISION variable that must be set by */
-/*             the user, and determines the accuracy with which the solution */
-/*             is to be found. The subroutine terminates when */
-
-/*                         ||G|| < EPS max(1,||X||), */
-
-/*             where ||.|| denotes the Euclidean norm. */
-
-/*     XTOL    is a  positive DOUBLE PRECISION variable that must be set by */
-/*             the user to an estimate of the machine precision (e.g. */
-/*             10**(-16) on a SUN station 3/60). The line search routine will */
-/*             terminate if the relative width of the interval of uncertainty */
-/*             is less than XTOL. */
-
-/*     W       is a DOUBLE PRECISION array of length N(2M+1)+2M used as */
-/*             workspace for LBFGS. This array must not be altered by the */
-/*             user. */
-
-/*     IFLAG   is an INTEGER variable that must be set to 0 on initial entry */
-/*             to the subroutine. A return with IFLAG<0 indicates an error, */
-/*             and IFLAG=0 indicates that the routine has terminated without */
-/*             detecting errors. On a return with IFLAG=1, the user must */
-/*             evaluate the function F and gradient G. On a return with */
-/*             IFLAG=2, the user must provide the diagonal matrix Hk0. */
-
-/*             The following negative values of IFLAG, detecting an error, */
-/*             are possible: */
-
-/*              IFLAG=-1  The line search routine MCSRCH failed. The */
-/*                        parameter INFO provides more detailed information */
-/*                        (see also the documentation of MCSRCH): */
-
-/*                       INFO = 0  IMPROPER INPUT PARAMETERS. */
-
-/*                       INFO = 2  RELATIVE WIDTH OF THE INTERVAL OF */
-/*                                 UNCERTAINTY IS AT MOST XTOL. */
-
-/*                       INFO = 3  MORE THAN 20 FUNCTION EVALUATIONS WERE */
-/*                                 REQUIRED AT THE PRESENT ITERATION. */
-
-/*                       INFO = 4  THE STEP IS TOO SMALL. */
-
-/*                       INFO = 5  THE STEP IS TOO LARGE. */
-
-/*                       INFO = 6  ROUNDING ERRORS PREVENT FURTHER PROGRESS. */
-/*                                 THERE MAY NOT BE A STEP WHICH SATISFIES */
-/*                                 THE SUFFICIENT DECREASE AND CURVATURE */
-/*                                 CONDITIONS. TOLERANCES MAY BE TOO SMALL. */
-
-
-/*              IFLAG=-2  The i-th diagonal element of the diagonal inverse */
-/*                        Hessian approximation, given in DIAG, is not */
-/*                        positive. */
-
-/*              IFLAG=-3  Improper input parameters for LBFGS (N or M are */
-/*                        not positive). */
-
-
-
-/*    ON THE DRIVER: */
-
-/*    The program that calls LBFGS must contain the declaration: */
-
-/*                       EXTERNAL LB2 */
-
-/*    LB2 is a BLOCK DATA that defines the default values of several */
-/*    parameters described in the COMMON section. */
-
-
-
-/*    COMMON: */
-
-/*     The subroutine contains one common area, which the user may wish to */
-/*    reference: */
-
-
-/*    MP  is an INTEGER variable with default value 6. It is used as the */
-/*        unit number for the printing of the monitoring information */
-/*        controlled by IPRINT. */
-
-/*    LP  is an INTEGER variable with default value 6. It is used as the */
-/*        unit number for the printing of error messages. This printing */
-/*        may be suppressed by setting LP to a non-positive value. */
-
-/*    GTOL is a DOUBLE PRECISION variable with default value 0.9, which */
-/*        controls the accuracy of the line search routine MCSRCH. If the */
-/*        function and gradient evaluations are inexpensive with respect */
-/*        to the cost of the iteration (which is sometimes the case when */
-/*        solving very large problems) it may be advantageous to set GTOL */
-/*        to a small value. A typical small value is 0.1.  Restriction: */
-/*        GTOL should be greater than 1.D-04. */
-
-/*    STPMIN and STPMAX are non-negative DOUBLE PRECISION variables which */
-/*        specify lower and uper bounds for the step in the line search. */
-/*        Their default values are 1.D-20 and 1.D+20, respectively. These */
-/*        values need not be modified unless the exponents are too large */
-/*        for the machine being used, or unless the problem is extremely */
-/*        badly scaled (in which case the exponents should be increased). */
-
-
-/*  MACHINE DEPENDENCIES */
-
-/*        The only variables that are machine-dependent are XTOL, */
-/*        STPMIN and STPMAX. */
-
-
-/*  GENERAL INFORMATION */
-
-/*    Other routines called directly:  DAXPY, DDOT, LB1, MCSRCH */
-
-/*    Input/Output  :  No input; diagnostic messages on unit MP and */
-/*                     error messages on unit LP. */
-
-
-/*     - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-
-
-    /* Parameter adjustments */
-    --diag;
-    --g;
-    --x;
-    --w;
-    --iprint;
-
-    /* Function Body */
-
-/*     INITIALIZE */
-/*     ---------- */
-
-    if (*iflag == 0) {
-	goto L10;
-    }
-    switch (*iflag) {
-	case 1:  goto L172;
-	case 2:  goto L100;
-    }
-L10:
-    iter = 0;
-    if (*n <= 0 || *m <= 0) {
-	goto L196;
-    }
-    if (lb3_1.gtol <= 1e-4) {
-	if (lb3_1.lp > 0) {
-	    io___4.ciunit = lb3_1.lp;
-	    s_wsfe(&io___4);
-	    e_wsfe();
-	}
-	lb3_1.gtol = .9;
-    }
-    nfun = 1;
-    point = 0;
-    finish = FALSE_;
-    if (*diagco) {
-	i__1 = *n;
-	for (i__ = 1; i__ <= i__1; ++i__) {
-/* L30: */
-	    if (diag[i__] <= zero) {
-		goto L195;
-	    }
-	}
-    } else {
-	i__1 = *n;
-	for (i__ = 1; i__ <= i__1; ++i__) {
-/* L40: */
-	    diag[i__] = 1.;
-	}
-    }
-
-/*     THE WORK VECTOR W IS DIVIDED AS FOLLOWS: */
-/*     --------------------------------------- */
-/*     THE FIRST N LOCATIONS ARE USED TO STORE THE GRADIENT AND */
-/*         OTHER TEMPORARY INFORMATION. */
-/*     LOCATIONS (N+1)...(N+M) STORE THE SCALARS RHO. */
-/*     LOCATIONS (N+M+1)...(N+2M) STORE THE NUMBERS ALPHA USED */
-/*         IN THE FORMULA THAT COMPUTES H*G. */
-/*     LOCATIONS (N+2M+1)...(N+2M+NM) STORE THE LAST M SEARCH */
-/*         STEPS. */
-/*     LOCATIONS (N+2M+NM+1)...(N+2M+2NM) STORE THE LAST M */
-/*         GRADIENT DIFFERENCES. */
-
-/*     THE SEARCH STEPS AND GRADIENT DIFFERENCES ARE STORED IN A */
-/*     CIRCULAR ORDER CONTROLLED BY THE PARAMETER POINT. */
-
-    ispt = *n + (*m << 1);
-    iypt = ispt + *n * *m;
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-/* L50: */
-	w[ispt + i__] = -g[i__] * diag[i__];
-    }
-    gnorm = sqrt(ddot_(n, &g[1], &c__1, &g[1], &c__1));
-    stp1 = one / gnorm;
-
-/*     PARAMETERS FOR LINE SEARCH ROUTINE */
-
-    ftol = 1e-4;
-    maxfev = 20;
-
-    if (iprint[1] >= 0) {
-	lb1_(&iprint[1], &iter, &nfun, &gnorm, n, m, &x[1], f, &g[1], &stp, &
-		finish);
-    }
-
-/*    -------------------- */
-/*     MAIN ITERATION LOOP */
-/*    -------------------- */
-
-L80:
-    ++iter;
-    info = 0;
-    bound = iter - 1;
-    if (iter == 1) {
-	goto L165;
-    }
-    if (iter > *m) {
-	bound = *m;
-    }
-
-    ys = ddot_(n, &w[iypt + npt + 1], &c__1, &w[ispt + npt + 1], &c__1);
-    if (! (*diagco)) {
-	yy = ddot_(n, &w[iypt + npt + 1], &c__1, &w[iypt + npt + 1], &c__1);
-	i__1 = *n;
-	for (i__ = 1; i__ <= i__1; ++i__) {
-/* L90: */
-	    diag[i__] = ys / yy;
-	}
-    } else {
-	*iflag = 2;
-	return 0;
-    }
-L100:
-    if (*diagco) {
-	i__1 = *n;
-	for (i__ = 1; i__ <= i__1; ++i__) {
-/* L110: */
-	    if (diag[i__] <= zero) {
-		goto L195;
-	    }
-	}
-    }
-
-/*     COMPUTE -H*G USING THE FORMULA GIVEN IN: Nocedal, J. 1980, */
-/*     "Updating quasi-Newton matrices with limited storage", */
-/*     Mathematics of Computation, Vol.24, No.151, pp. 773-782. */
-/*     --------------------------------------------------------- */
-
-    cp = point;
-    if (point == 0) {
-	cp = *m;
-    }
-    w[*n + cp] = one / ys;
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-/* L112: */
-	w[i__] = -g[i__];
-    }
-    cp = point;
-    i__1 = bound;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	--cp;
-	if (cp == -1) {
-	    cp = *m - 1;
-	}
-	sq = ddot_(n, &w[ispt + cp * *n + 1], &c__1, &w[1], &c__1);
-	inmc = *n + *m + cp + 1;
-	iycn = iypt + cp * *n;
-	w[inmc] = w[*n + cp + 1] * sq;
-	d__1 = -w[inmc];
-	daxpy_(n, &d__1, &w[iycn + 1], &c__1, &w[1], &c__1);
-/* L125: */
-    }
-
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-/* L130: */
-	w[i__] = diag[i__] * w[i__];
-    }
-
-    i__1 = bound;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	yr = ddot_(n, &w[iypt + cp * *n + 1], &c__1, &w[1], &c__1);
-	beta = w[*n + cp + 1] * yr;
-	inmc = *n + *m + cp + 1;
-	beta = w[inmc] - beta;
-	iscn = ispt + cp * *n;
-	daxpy_(n, &beta, &w[iscn + 1], &c__1, &w[1], &c__1);
-	++cp;
-	if (cp == *m) {
-	    cp = 0;
-	}
-/* L145: */
-    }
-
-/*     STORE THE NEW SEARCH DIRECTION */
-/*     ------------------------------ */
-
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-/* L160: */
-	w[ispt + point * *n + i__] = w[i__];
-    }
-
-/*     OBTAIN THE ONE-DIMENSIONAL MINIMIZER OF THE FUNCTION */
-/*     BY USING THE LINE SEARCH ROUTINE MCSRCH */
-/*     ---------------------------------------------------- */
-L165:
-    nfev = 0;
-    stp = one;
-    if (iter == 1) {
-	stp = stp1;
-    }
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-/* L170: */
-	w[i__] = g[i__];
-    }
-L172:
-    mcsrch_(n, &x[1], f, &g[1], &w[ispt + point * *n + 1], &stp, &ftol, xtol, 
-	    &maxfev, &info, &nfev, &diag[1]);
-    if (info == -1) {
-	*iflag = 1;
-	return 0;
-    }
-    if (info != 1) {
-	goto L190;
-    }
-    nfun += nfev;
-
-/*     COMPUTE THE NEW STEP AND GRADIENT CHANGE */
-/*     ----------------------------------------- */
-
-    npt = point * *n;
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	w[ispt + npt + i__] = stp * w[ispt + npt + i__];
-/* L175: */
-	w[iypt + npt + i__] = g[i__] - w[i__];
-    }
-    ++point;
-    if (point == *m) {
-	point = 0;
-    }
-
-/*     TERMINATION TEST */
-/*     ---------------- */
-
-    gnorm = sqrt(ddot_(n, &g[1], &c__1, &g[1], &c__1));
-    xnorm = sqrt(ddot_(n, &x[1], &c__1, &x[1], &c__1));
-    xnorm = max(1.,xnorm);
-    if (gnorm / xnorm <= *eps) {
-	finish = TRUE_;
-    }
-
-    if (iprint[1] >= 0) {
-	lb1_(&iprint[1], &iter, &nfun, &gnorm, n, m, &x[1], f, &g[1], &stp, &
-		finish);
-    }
-    if (finish) {
-	*iflag = 0;
-	return 0;
-    }
-    goto L80;
-
-/*     ------------------------------------------------------------ */
-/*     END OF MAIN ITERATION LOOP. ERROR EXITS. */
-/*     ------------------------------------------------------------ */
-
-L190:
-    *iflag = -1;
-    if (lb3_1.lp > 0) {
-	io___30.ciunit = lb3_1.lp;
-	s_wsfe(&io___30);
-	do_fio(&c__1, (char *)&info, (ftnlen)sizeof(integer));
-	e_wsfe();
-    }
-    return 0;
-L195:
-    *iflag = -2;
-    if (lb3_1.lp > 0) {
-	io___31.ciunit = lb3_1.lp;
-	s_wsfe(&io___31);
-	do_fio(&c__1, (char *)&i__, (ftnlen)sizeof(integer));
-	e_wsfe();
-    }
-    return 0;
-L196:
-    *iflag = -3;
-    if (lb3_1.lp > 0) {
-	io___32.ciunit = lb3_1.lp;
-	s_wsfe(&io___32);
-	e_wsfe();
-    }
-
-/*     FORMATS */
-/*     ------- */
-
-    return 0;
-} /* lbfgs_ */
-
-
-/*     LAST LINE OF SUBROUTINE LBFGS */
-
-
-/* Subroutine */ int lb1_(integer *iprint, integer *iter, integer *nfun, 
-	doublereal *gnorm, integer *n, integer *m, doublereal *x, doublereal *
-	f, doublereal *g, doublereal *stp, logical *finish)
+	memcpy(param, &_defparam, sizeof(*param));
+}
+
+int lbfgs(
+	const int n,
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *ptr_fx,
+	lbfgs_evaluate_t proc_evaluate,
+	lbfgs_progress_t proc_progress,
+	void *instance,
+	lbfgs_parameter_t *_param
+	)
 {
-    /* Format strings */
-    static char fmt_10[] = "(\002*******************************************"
-	    "******\002)";
-    static char fmt_20[] = "(\002  N=\002,i5,\002   NUMBER OF CORRECTIONS"
-	    "=\002,i2,/,\002       INITIAL VALUES\002)";
-    static char fmt_30[] = "(\002 F= \002,1pd10.3,\002   GNORM= \002,1pd10.3)"
-	    ;
-    static char fmt_40[] = "(\002 VECTOR X= \002)";
-    static char fmt_50[] = "(6(2x,1pd10.3))";
-    static char fmt_60[] = "(\002 GRADIENT VECTOR G= \002)";
-    static char fmt_70[] = "(/\002   I   NFN\002,4x,\002FUNC\002,8x,\002GN"
-	    "ORM\002,7x,\002STEPLENGTH\002/)";
-    static char fmt_80[] = "(2(i4,1x),3x,3(1pd10.3,2x))";
-    static char fmt_90[] = "(\002 FINAL POINT X= \002)";
-    static char fmt_100[] = "(/\002 THE MINIMIZATION TERMINATED WITHOUT DETE"
-	    "CTING ERRORS.\002,/\002 IFLAG = 0\002)";
+	int ret;
+	int i, j, k, ls, end, bound;
+	lbfgsfloatval_t step;
 
-    /* System generated locals */
-    integer i__1;
+	/* Constant parameters and their default values. */
+	const lbfgs_parameter_t* param = (_param != NULL) ? _param : &_defparam;
+	const int m = param->m;
 
-    /* Builtin functions */
-    integer s_wsfe(cilist *), e_wsfe(void), do_fio(integer *, char *, ftnlen);
+	lbfgsfloatval_t *xp = NULL, *g = NULL, *gp = NULL, *d = NULL, *w = NULL;
+	iteration_data_t *lm = NULL, *it = NULL;
+	lbfgsfloatval_t ys, yy;
+	lbfgsfloatval_t norm, xnorm, gnorm, beta;
+	lbfgsfloatval_t fx = 0.;
 
-    /* Local variables */
-    static integer i__;
-
-    /* Fortran I/O blocks */
-    static cilist io___33 = { 0, 0, 0, fmt_10, 0 };
-    static cilist io___34 = { 0, 0, 0, fmt_20, 0 };
-    static cilist io___35 = { 0, 0, 0, fmt_30, 0 };
-    static cilist io___36 = { 0, 0, 0, fmt_40, 0 };
-    static cilist io___37 = { 0, 0, 0, fmt_50, 0 };
-    static cilist io___39 = { 0, 0, 0, fmt_60, 0 };
-    static cilist io___40 = { 0, 0, 0, fmt_50, 0 };
-    static cilist io___41 = { 0, 0, 0, fmt_10, 0 };
-    static cilist io___42 = { 0, 0, 0, fmt_70, 0 };
-    static cilist io___43 = { 0, 0, 0, fmt_70, 0 };
-    static cilist io___44 = { 0, 0, 0, fmt_80, 0 };
-    static cilist io___45 = { 0, 0, 0, fmt_70, 0 };
-    static cilist io___46 = { 0, 0, 0, fmt_80, 0 };
-    static cilist io___47 = { 0, 0, 0, fmt_90, 0 };
-    static cilist io___48 = { 0, 0, 0, fmt_40, 0 };
-    static cilist io___49 = { 0, 0, 0, fmt_50, 0 };
-    static cilist io___50 = { 0, 0, 0, fmt_60, 0 };
-    static cilist io___51 = { 0, 0, 0, fmt_50, 0 };
-    static cilist io___52 = { 0, 0, 0, fmt_100, 0 };
-
-
-
-/*     ------------------------------------------------------------- */
-/*     THIS ROUTINE PRINTS MONITORING INFORMATION. THE FREQUENCY AND */
-/*     AMOUNT OF OUTPUT ARE CONTROLLED BY IPRINT. */
-/*     ------------------------------------------------------------- */
-
-
-    /* Parameter adjustments */
-    --iprint;
-    --g;
-    --x;
-
-    /* Function Body */
-    if (*iter == 0) {
-	io___33.ciunit = lb3_1.mp;
-	s_wsfe(&io___33);
-	e_wsfe();
-	io___34.ciunit = lb3_1.mp;
-	s_wsfe(&io___34);
-	do_fio(&c__1, (char *)&(*n), (ftnlen)sizeof(integer));
-	do_fio(&c__1, (char *)&(*m), (ftnlen)sizeof(integer));
-	e_wsfe();
-	io___35.ciunit = lb3_1.mp;
-	s_wsfe(&io___35);
-	do_fio(&c__1, (char *)&(*f), (ftnlen)sizeof(doublereal));
-	do_fio(&c__1, (char *)&(*gnorm), (ftnlen)sizeof(doublereal));
-	e_wsfe();
-	if (iprint[2] >= 1) {
-	    io___36.ciunit = lb3_1.mp;
-	    s_wsfe(&io___36);
-	    e_wsfe();
-	    io___37.ciunit = lb3_1.mp;
-	    s_wsfe(&io___37);
-	    i__1 = *n;
-	    for (i__ = 1; i__ <= i__1; ++i__) {
-		do_fio(&c__1, (char *)&x[i__], (ftnlen)sizeof(doublereal));
-	    }
-	    e_wsfe();
-	    io___39.ciunit = lb3_1.mp;
-	    s_wsfe(&io___39);
-	    e_wsfe();
-	    io___40.ciunit = lb3_1.mp;
-	    s_wsfe(&io___40);
-	    i__1 = *n;
-	    for (i__ = 1; i__ <= i__1; ++i__) {
-		do_fio(&c__1, (char *)&g[i__], (ftnlen)sizeof(doublereal));
-	    }
-	    e_wsfe();
+	/* Check the input parameters for errors. */
+	if (n <= 0) {
+		return LBFGSERR_INVALID_N;
 	}
-	io___41.ciunit = lb3_1.mp;
-	s_wsfe(&io___41);
-	e_wsfe();
-	io___42.ciunit = lb3_1.mp;
-	s_wsfe(&io___42);
-	e_wsfe();
-    } else {
-	if (iprint[1] == 0 && (*iter != 1 && ! (*finish))) {
-	    return 0;
+#if		defined(USE_SSE) && defined(__SSE__)
+	if (n % 8 != 0) {
+		return LBFGSERR_INVALID_N_SSE;
 	}
-	if (iprint[1] != 0) {
-	    if ((*iter - 1) % iprint[1] == 0 || *finish) {
-		if (iprint[2] > 1 && *iter > 1) {
-		    io___43.ciunit = lb3_1.mp;
-		    s_wsfe(&io___43);
-		    e_wsfe();
+#endif/*defined(__SSE__)*/
+	if (param->min_step < 0.) {
+		return LBFGSERR_INVALID_MINSTEP;
+	}
+	if (param->max_step < param->min_step) {
+		return LBFGSERR_INVALID_MAXSTEP;
+	}
+	if (param->ftol < 0.) {
+		return LBFGSERR_INVALID_FTOL;
+	}
+	if (param->gtol < 0.) {
+		return LBFGSERR_INVALID_GTOL;
+	}
+	if (param->xtol < 0.) {
+		return LBFGSERR_INVALID_XTOL;
+	}
+	if (param->max_linesearch <= 0) {
+		return LBFGSERR_INVALID_MAXLINESEARCH;
+	}
+	if (param->orthantwise_c < 0.) {
+		return LBFGSERR_INVALID_ORTHANTWISE;
+	}
+
+	/* Allocate working space. */
+	xp = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+	g = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+	gp = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+	d = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+	w = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+	if (xp == NULL || g == NULL || gp == NULL || d == NULL || w == NULL) {
+		ret = LBFGSERR_OUTOFMEMORY;
+		goto lbfgs_exit;
+	}
+
+	/* Allocate limited memory storage. */
+	lm = (iteration_data_t*)vecalloc(m * sizeof(iteration_data_t));
+	if (lm == NULL) {
+		ret = LBFGSERR_OUTOFMEMORY;
+		goto lbfgs_exit;
+	}
+
+	/* Initialize the limited memory. */
+	for (i = 0;i < m;++i) {
+		it = &lm[i];
+		it->alpha = 0;
+		it->ys = 0;
+		it->s = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+		it->y = (lbfgsfloatval_t*)vecalloc(n * sizeof(lbfgsfloatval_t));
+		if (it->s == NULL || it->y == NULL) {
+			ret = LBFGSERR_OUTOFMEMORY;
+			goto lbfgs_exit;
 		}
-		io___44.ciunit = lb3_1.mp;
-		s_wsfe(&io___44);
-		do_fio(&c__1, (char *)&(*iter), (ftnlen)sizeof(integer));
-		do_fio(&c__1, (char *)&(*nfun), (ftnlen)sizeof(integer));
-		do_fio(&c__1, (char *)&(*f), (ftnlen)sizeof(doublereal));
-		do_fio(&c__1, (char *)&(*gnorm), (ftnlen)sizeof(doublereal));
-		do_fio(&c__1, (char *)&(*stp), (ftnlen)sizeof(doublereal));
-		e_wsfe();
-	    } else {
-		return 0;
-	    }
-	} else {
-	    if (iprint[2] > 1 && *finish) {
-		io___45.ciunit = lb3_1.mp;
-		s_wsfe(&io___45);
-		e_wsfe();
-	    }
-	    io___46.ciunit = lb3_1.mp;
-	    s_wsfe(&io___46);
-	    do_fio(&c__1, (char *)&(*iter), (ftnlen)sizeof(integer));
-	    do_fio(&c__1, (char *)&(*nfun), (ftnlen)sizeof(integer));
-	    do_fio(&c__1, (char *)&(*f), (ftnlen)sizeof(doublereal));
-	    do_fio(&c__1, (char *)&(*gnorm), (ftnlen)sizeof(doublereal));
-	    do_fio(&c__1, (char *)&(*stp), (ftnlen)sizeof(doublereal));
-	    e_wsfe();
 	}
-	if (iprint[2] == 2 || iprint[2] == 3) {
-	    if (*finish) {
-		io___47.ciunit = lb3_1.mp;
-		s_wsfe(&io___47);
-		e_wsfe();
-	    } else {
-		io___48.ciunit = lb3_1.mp;
-		s_wsfe(&io___48);
-		e_wsfe();
-	    }
-	    io___49.ciunit = lb3_1.mp;
-	    s_wsfe(&io___49);
-	    i__1 = *n;
-	    for (i__ = 1; i__ <= i__1; ++i__) {
-		do_fio(&c__1, (char *)&x[i__], (ftnlen)sizeof(doublereal));
-	    }
-	    e_wsfe();
-	    if (iprint[2] == 3) {
-		io___50.ciunit = lb3_1.mp;
-		s_wsfe(&io___50);
-		e_wsfe();
-		io___51.ciunit = lb3_1.mp;
-		s_wsfe(&io___51);
-		i__1 = *n;
-		for (i__ = 1; i__ <= i__1; ++i__) {
-		    do_fio(&c__1, (char *)&g[i__], (ftnlen)sizeof(doublereal))
-			    ;
+
+	/* Evaluate the function value and its gradient. */
+    fx = proc_evaluate(instance, x, g, n, 0);
+	if (0. < param->orthantwise_c) {
+		/* Compute L1-regularization factor and add it to the object value. */
+		norm = 0.;
+		for (i = 0;i < n;++i) {
+			norm += fabs(x[i]);
 		}
-		e_wsfe();
-	    }
+		fx += norm * param->orthantwise_c;
 	}
-	if (*finish) {
-	    io___52.ciunit = lb3_1.mp;
-	    s_wsfe(&io___52);
-	    e_wsfe();
-	}
-    }
 
-
-    return 0;
-} /* lb1_ */
-
-/*     ****** */
-
-
-/*   ---------------------------------------------------------- */
-/*     DATA */
-/*   ---------------------------------------------------------- */
-
-/* Subroutine */ int lb2_(void)
-{
-    return 0;
-} /* lb2_ */
-
-
-
-
-/*   ---------------------------------------------------------- */
-
-/* Subroutine */ int daxpy_(integer *n, doublereal *da, doublereal *dx, 
-	integer *incx, doublereal *dy, integer *incy)
-{
-    /* System generated locals */
-    integer i__1;
-
-    /* Local variables */
-    static integer i__, m, ix, iy, mp1;
-
-
-/*     constant times a vector plus a vector. */
-/*     uses unrolled loops for increments equal to one. */
-/*     jack dongarra, linpack, 3/11/78. */
-
-
-    /* Parameter adjustments */
-    --dy;
-    --dx;
-
-    /* Function Body */
-    if (*n <= 0) {
-	return 0;
-    }
-    if (*da == 0.) {
-	return 0;
-    }
-    if (*incx == 1 && *incy == 1) {
-	goto L20;
-    }
-
-/*        code for unequal increments or equal increments */
-/*          not equal to 1 */
-
-    ix = 1;
-    iy = 1;
-    if (*incx < 0) {
-	ix = (-(*n) + 1) * *incx + 1;
-    }
-    if (*incy < 0) {
-	iy = (-(*n) + 1) * *incy + 1;
-    }
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	dy[iy] += *da * dx[ix];
-	ix += *incx;
-	iy += *incy;
-/* L10: */
-    }
-    return 0;
-
-/*        code for both increments equal to 1 */
-
-
-/*        clean-up loop */
-
-L20:
-    m = *n % 4;
-    if (m == 0) {
-	goto L40;
-    }
-    i__1 = m;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	dy[i__] += *da * dx[i__];
-/* L30: */
-    }
-    if (*n < 4) {
-	return 0;
-    }
-L40:
-    mp1 = m + 1;
-    i__1 = *n;
-    for (i__ = mp1; i__ <= i__1; i__ += 4) {
-	dy[i__] += *da * dx[i__];
-	dy[i__ + 1] += *da * dx[i__ + 1];
-	dy[i__ + 2] += *da * dx[i__ + 2];
-	dy[i__ + 3] += *da * dx[i__ + 3];
-/* L50: */
-    }
-    return 0;
-} /* daxpy_ */
-
-
-
-/*   ---------------------------------------------------------- */
-
-doublereal ddot_(integer *n, doublereal *dx, integer *incx, doublereal *dy, 
-	integer *incy)
-{
-    /* System generated locals */
-    integer i__1;
-    doublereal ret_val;
-
-    /* Local variables */
-    static integer i__, m, ix, iy, mp1;
-    static doublereal dtemp;
-
-
-/*     forms the dot product of two vectors. */
-/*     uses unrolled loops for increments equal to one. */
-/*     jack dongarra, linpack, 3/11/78. */
-
-
-    /* Parameter adjustments */
-    --dy;
-    --dx;
-
-    /* Function Body */
-    ret_val = 0.;
-    dtemp = 0.;
-    if (*n <= 0) {
-	return ret_val;
-    }
-    if (*incx == 1 && *incy == 1) {
-	goto L20;
-    }
-
-/*        code for unequal increments or equal increments */
-/*          not equal to 1 */
-
-    ix = 1;
-    iy = 1;
-    if (*incx < 0) {
-	ix = (-(*n) + 1) * *incx + 1;
-    }
-    if (*incy < 0) {
-	iy = (-(*n) + 1) * *incy + 1;
-    }
-    i__1 = *n;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	dtemp += dx[ix] * dy[iy];
-	ix += *incx;
-	iy += *incy;
-/* L10: */
-    }
-    ret_val = dtemp;
-    return ret_val;
-
-/*        code for both increments equal to 1 */
-
-
-/*        clean-up loop */
-
-L20:
-    m = *n % 5;
-    if (m == 0) {
-	goto L40;
-    }
-    i__1 = m;
-    for (i__ = 1; i__ <= i__1; ++i__) {
-	dtemp += dx[i__] * dy[i__];
-/* L30: */
-    }
-    if (*n < 5) {
-	goto L60;
-    }
-L40:
-    mp1 = m + 1;
-    i__1 = *n;
-    for (i__ = mp1; i__ <= i__1; i__ += 5) {
-	dtemp = dtemp + dx[i__] * dy[i__] + dx[i__ + 1] * dy[i__ + 1] + dx[
-		i__ + 2] * dy[i__ + 2] + dx[i__ + 3] * dy[i__ + 3] + dx[i__ + 
-		4] * dy[i__ + 4];
-/* L50: */
-    }
-L60:
-    ret_val = dtemp;
-    return ret_val;
-} /* ddot_ */
-
-/*    ------------------------------------------------------------------ */
-
-/*     ************************** */
-/*     LINE SEARCH ROUTINE MCSRCH */
-/*     ************************** */
-
-/* Subroutine */ int mcsrch_(integer *n, doublereal *x, doublereal *f, 
-	doublereal *g, doublereal *s, doublereal *stp, doublereal *ftol, 
-	doublereal *xtol, integer *maxfev, integer *info, integer *nfev, 
-	doublereal *wa)
-{
-    /* Initialized data */
-
-    static doublereal p5 = .5;
-    static doublereal p66 = .66;
-    static doublereal xtrapf = 4.;
-    static doublereal zero = 0.;
-
-    /* Format strings */
-    static char fmt_15[] = "(/\002  THE SEARCH DIRECTION IS NOT A DESCENT DI"
-	    "RECTION\002)";
-
-    /* System generated locals */
-    integer i__1;
-    doublereal d__1;
-
-    /* Builtin functions */
-    integer s_wsfe(cilist *), e_wsfe(void);
-
-    /* Local variables */
-    static integer j;
-    static doublereal dg, fm, fx, fy, dgm, dgx, dgy, fxm, fym, stx, sty, dgxm,
-	     dgym;
-    static integer infoc;
-    static doublereal finit, width, stmin, stmax;
-    static logical stage1;
-    static doublereal width1, ftest1;
-    static logical brackt;
-    static doublereal dginit, dgtest;
-    extern /* Subroutine */ int mcstep_(doublereal *, doublereal *, 
-	    doublereal *, doublereal *, doublereal *, doublereal *, 
-	    doublereal *, doublereal *, doublereal *, logical *, doublereal *,
-	     doublereal *, integer *);
-
-    /* Fortran I/O blocks */
-    static cilist io___71 = { 0, 0, 0, fmt_15, 0 };
-
-
-
-/*                     SUBROUTINE MCSRCH */
-
-/*     A slight modification of the subroutine CSRCH of More' and Thuente. */
-/*     The changes are to allow reverse communication, and do not affect */
-/*     the performance of the routine. */
-
-/*     THE PURPOSE OF MCSRCH IS TO FIND A STEP WHICH SATISFIES */
-/*     A SUFFICIENT DECREASE CONDITION AND A CURVATURE CONDITION. */
-
-/*     AT EACH STAGE THE SUBROUTINE UPDATES AN INTERVAL OF */
-/*     UNCERTAINTY WITH ENDPOINTS STX AND STY. THE INTERVAL OF */
-/*     UNCERTAINTY IS INITIALLY CHOSEN SO THAT IT CONTAINS A */
-/*     MINIMIZER OF THE MODIFIED FUNCTION */
-
-/*          F(X+STP*S) - F(X) - FTOL*STP*(GRADF(X)'S). */
-
-/*     IF A STEP IS OBTAINED FOR WHICH THE MODIFIED FUNCTION */
-/*     HAS A NONPOSITIVE FUNCTION VALUE AND NONNEGATIVE DERIVATIVE, */
-/*     THEN THE INTERVAL OF UNCERTAINTY IS CHOSEN SO THAT IT */
-/*     CONTAINS A MINIMIZER OF F(X+STP*S). */
-
-/*     THE ALGORITHM IS DESIGNED TO FIND A STEP WHICH SATISFIES */
-/*     THE SUFFICIENT DECREASE CONDITION */
-
-/*           F(X+STP*S) .LE. F(X) + FTOL*STP*(GRADF(X)'S), */
-
-/*     AND THE CURVATURE CONDITION */
-
-/*           ABS(GRADF(X+STP*S)'S)) .LE. GTOL*ABS(GRADF(X)'S). */
-
-/*     IF FTOL IS LESS THAN GTOL AND IF, FOR EXAMPLE, THE FUNCTION */
-/*     IS BOUNDED BELOW, THEN THERE IS ALWAYS A STEP WHICH SATISFIES */
-/*     BOTH CONDITIONS. IF NO STEP CAN BE FOUND WHICH SATISFIES BOTH */
-/*     CONDITIONS, THEN THE ALGORITHM USUALLY STOPS WHEN ROUNDING */
-/*     ERRORS PREVENT FURTHER PROGRESS. IN THIS CASE STP ONLY */
-/*     SATISFIES THE SUFFICIENT DECREASE CONDITION. */
-
-/*     THE SUBROUTINE STATEMENT IS */
-
-/*        SUBROUTINE MCSRCH(N,X,F,G,S,STP,FTOL,XTOL, MAXFEV,INFO,NFEV,WA) */
-/*     WHERE */
-
-/*       N IS A POSITIVE INTEGER INPUT VARIABLE SET TO THE NUMBER */
-/*         OF VARIABLES. */
-
-/*       X IS AN ARRAY OF LENGTH N. ON INPUT IT MUST CONTAIN THE */
-/*         BASE POINT FOR THE LINE SEARCH. ON OUTPUT IT CONTAINS */
-/*         X + STP*S. */
-
-/*       F IS A VARIABLE. ON INPUT IT MUST CONTAIN THE VALUE OF F */
-/*         AT X. ON OUTPUT IT CONTAINS THE VALUE OF F AT X + STP*S. */
-
-/*       G IS AN ARRAY OF LENGTH N. ON INPUT IT MUST CONTAIN THE */
-/*         GRADIENT OF F AT X. ON OUTPUT IT CONTAINS THE GRADIENT */
-/*         OF F AT X + STP*S. */
-
-/*       S IS AN INPUT ARRAY OF LENGTH N WHICH SPECIFIES THE */
-/*         SEARCH DIRECTION. */
-
-/*       STP IS A NONNEGATIVE VARIABLE. ON INPUT STP CONTAINS AN */
-/*         INITIAL ESTIMATE OF A SATISFACTORY STEP. ON OUTPUT */
-/*         STP CONTAINS THE FINAL ESTIMATE. */
-
-/*       FTOL AND GTOL ARE NONNEGATIVE INPUT VARIABLES. (In this reverse */
-/*         communication implementation GTOL is defined in a COMMON */
-/*         statement.) TERMINATION OCCURS WHEN THE SUFFICIENT DECREASE */
-/*         CONDITION AND THE DIRECTIONAL DERIVATIVE CONDITION ARE */
-/*         SATISFIED. */
-
-/*       XTOL IS A NONNEGATIVE INPUT VARIABLE. TERMINATION OCCURS */
-/*         WHEN THE RELATIVE WIDTH OF THE INTERVAL OF UNCERTAINTY */
-/*         IS AT MOST XTOL. */
-
-/*       STPMIN AND STPMAX ARE NONNEGATIVE INPUT VARIABLES WHICH */
-/*         SPECIFY LOWER AND UPPER BOUNDS FOR THE STEP. (In this reverse */
-/*         communication implementatin they are defined in a COMMON */
-/*         statement). */
-
-/*       MAXFEV IS A POSITIVE INTEGER INPUT VARIABLE. TERMINATION */
-/*         OCCURS WHEN THE NUMBER OF CALLS TO FCN IS AT LEAST */
-/*         MAXFEV BY THE END OF AN ITERATION. */
-
-/*       INFO IS AN INTEGER OUTPUT VARIABLE SET AS FOLLOWS: */
-
-/*         INFO = 0  IMPROPER INPUT PARAMETERS. */
-
-/*         INFO =-1  A RETURN IS MADE TO COMPUTE THE FUNCTION AND GRADIENT. */
-
-/*         INFO = 1  THE SUFFICIENT DECREASE CONDITION AND THE */
-/*                   DIRECTIONAL DERIVATIVE CONDITION HOLD. */
-
-/*         INFO = 2  RELATIVE WIDTH OF THE INTERVAL OF UNCERTAINTY */
-/*                   IS AT MOST XTOL. */
-
-/*         INFO = 3  NUMBER OF CALLS TO FCN HAS REACHED MAXFEV. */
-
-/*         INFO = 4  THE STEP IS AT THE LOWER BOUND STPMIN. */
-
-/*         INFO = 5  THE STEP IS AT THE UPPER BOUND STPMAX. */
-
-/*         INFO = 6  ROUNDING ERRORS PREVENT FURTHER PROGRESS. */
-/*                   THERE MAY NOT BE A STEP WHICH SATISFIES THE */
-/*                   SUFFICIENT DECREASE AND CURVATURE CONDITIONS. */
-/*                   TOLERANCES MAY BE TOO SMALL. */
-
-/*       NFEV IS AN INTEGER OUTPUT VARIABLE SET TO THE NUMBER OF */
-/*         CALLS TO FCN. */
-
-/*       WA IS A WORK ARRAY OF LENGTH N. */
-
-/*     SUBPROGRAMS CALLED */
-
-/*       MCSTEP */
-
-/*       FORTRAN-SUPPLIED...ABS,MAX,MIN */
-
-/*     ARGONNE NATIONAL LABORATORY. MINPACK PROJECT. JUNE 1983 */
-/*     JORGE J. MORE', DAVID J. THUENTE */
-
-/*     ********** */
-    /* Parameter adjustments */
-    --wa;
-    --s;
-    --g;
-    --x;
-
-    /* Function Body */
-    if (*info == -1) {
-	goto L45;
-    }
-    infoc = 1;
-
-/*     CHECK THE INPUT PARAMETERS FOR ERRORS. */
-
-    if (*n <= 0 || *stp <= zero || *ftol < zero || lb3_1.gtol < zero || *xtol 
-	    < zero || lb3_1.stpmin < zero || lb3_1.stpmax < lb3_1.stpmin || *
-	    maxfev <= 0) {
-	return 0;
-    }
-
-/*     COMPUTE THE INITIAL GRADIENT IN THE SEARCH DIRECTION */
-/*     AND CHECK THAT S IS A DESCENT DIRECTION. */
-
-    dginit = zero;
-    i__1 = *n;
-    for (j = 1; j <= i__1; ++j) {
-	dginit += g[j] * s[j];
-/* L10: */
-    }
-    if (dginit >= zero) {
-	io___71.ciunit = lb3_1.lp;
-	s_wsfe(&io___71);
-	e_wsfe();
-	return 0;
-    }
-
-/*     INITIALIZE LOCAL VARIABLES. */
-
-    brackt = FALSE_;
-    stage1 = TRUE_;
-    *nfev = 0;
-    finit = *f;
-    dgtest = *ftol * dginit;
-    width = lb3_1.stpmax - lb3_1.stpmin;
-    width1 = width / p5;
-    i__1 = *n;
-    for (j = 1; j <= i__1; ++j) {
-	wa[j] = x[j];
-/* L20: */
-    }
-
-/*     THE VARIABLES STX, FX, DGX CONTAIN THE VALUES OF THE STEP, */
-/*     FUNCTION, AND DIRECTIONAL DERIVATIVE AT THE BEST STEP. */
-/*     THE VARIABLES STY, FY, DGY CONTAIN THE VALUE OF THE STEP, */
-/*     FUNCTION, AND DERIVATIVE AT THE OTHER ENDPOINT OF */
-/*     THE INTERVAL OF UNCERTAINTY. */
-/*     THE VARIABLES STP, F, DG CONTAIN THE VALUES OF THE STEP, */
-/*     FUNCTION, AND DERIVATIVE AT THE CURRENT STEP. */
-
-    stx = zero;
-    fx = finit;
-    dgx = dginit;
-    sty = zero;
-    fy = finit;
-    dgy = dginit;
-
-/*     START OF ITERATION. */
-
-L30:
-
-/*        SET THE MINIMUM AND MAXIMUM STEPS TO CORRESPOND */
-/*        TO THE PRESENT INTERVAL OF UNCERTAINTY. */
-
-    if (brackt) {
-	stmin = min(stx,sty);
-	stmax = max(stx,sty);
-    } else {
-	stmin = stx;
-	stmax = *stp + xtrapf * (*stp - stx);
-    }
-
-/*        FORCE THE STEP TO BE WITHIN THE BOUNDS STPMAX AND STPMIN. */
-
-    *stp = max(*stp,lb3_1.stpmin);
-    *stp = min(*stp,lb3_1.stpmax);
-
-/*        IF AN UNUSUAL TERMINATION IS TO OCCUR THEN LET */
-/*        STP BE THE LOWEST POINT OBTAINED SO FAR. */
-
-    if (brackt && (*stp <= stmin || *stp >= stmax) || *nfev >= *maxfev - 1 || 
-	    infoc == 0 || brackt && stmax - stmin <= *xtol * stmax) {
-	*stp = stx;
-    }
-
-/*        EVALUATE THE FUNCTION AND GRADIENT AT STP */
-/*        AND COMPUTE THE DIRECTIONAL DERIVATIVE. */
-/*        We return to main program to obtain F and G. */
-
-    i__1 = *n;
-    for (j = 1; j <= i__1; ++j) {
-	x[j] = wa[j] + *stp * s[j];
-/* L40: */
-    }
-    *info = -1;
-    return 0;
-
-L45:
-    *info = 0;
-    ++(*nfev);
-    dg = zero;
-    i__1 = *n;
-    for (j = 1; j <= i__1; ++j) {
-	dg += g[j] * s[j];
-/* L50: */
-    }
-    ftest1 = finit + *stp * dgtest;
-
-/*        TEST FOR CONVERGENCE. */
-
-    if (brackt && (*stp <= stmin || *stp >= stmax) || infoc == 0) {
-	*info = 6;
-    }
-    if (*stp == lb3_1.stpmax && *f <= ftest1 && dg <= dgtest) {
-	*info = 5;
-    }
-    if (*stp == lb3_1.stpmin && (*f > ftest1 || dg >= dgtest)) {
-	*info = 4;
-    }
-    if (*nfev >= *maxfev) {
-	*info = 3;
-    }
-    if (brackt && stmax - stmin <= *xtol * stmax) {
-	*info = 2;
-    }
-    if (*f <= ftest1 && abs(dg) <= lb3_1.gtol * (-dginit)) {
-	*info = 1;
-    }
-
-/*        CHECK FOR TERMINATION. */
-
-    if (*info != 0) {
-	return 0;
-    }
-
-/*        IN THE FIRST STAGE WE SEEK A STEP FOR WHICH THE MODIFIED */
-/*        FUNCTION HAS A NONPOSITIVE VALUE AND NONNEGATIVE DERIVATIVE. */
-
-    if (stage1 && *f <= ftest1 && dg >= min(*ftol,lb3_1.gtol) * dginit) {
-	stage1 = FALSE_;
-    }
-
-/*        A MODIFIED FUNCTION IS USED TO PREDICT THE STEP ONLY IF */
-/*        WE HAVE NOT OBTAINED A STEP FOR WHICH THE MODIFIED */
-/*        FUNCTION HAS A NONPOSITIVE FUNCTION VALUE AND NONNEGATIVE */
-/*        DERIVATIVE, AND IF A LOWER FUNCTION VALUE HAS BEEN */
-/*        OBTAINED BUT THE DECREASE IS NOT SUFFICIENT. */
-
-    if (stage1 && *f <= fx && *f > ftest1) {
-
-/*           DEFINE THE MODIFIED FUNCTION AND DERIVATIVE VALUES. */
-
-	fm = *f - *stp * dgtest;
-	fxm = fx - stx * dgtest;
-	fym = fy - sty * dgtest;
-	dgm = dg - dgtest;
-	dgxm = dgx - dgtest;
-	dgym = dgy - dgtest;
-
-/*           CALL CSTEP TO UPDATE THE INTERVAL OF UNCERTAINTY */
-/*           AND TO COMPUTE THE NEW STEP. */
-
-	mcstep_(&stx, &fxm, &dgxm, &sty, &fym, &dgym, stp, &fm, &dgm, &brackt,
-		 &stmin, &stmax, &infoc);
-
-/*           RESET THE FUNCTION AND GRADIENT VALUES FOR F. */
-
-	fx = fxm + stx * dgtest;
-	fy = fym + sty * dgtest;
-	dgx = dgxm + dgtest;
-	dgy = dgym + dgtest;
-    } else {
-
-/*           CALL MCSTEP TO UPDATE THE INTERVAL OF UNCERTAINTY */
-/*           AND TO COMPUTE THE NEW STEP. */
-
-	mcstep_(&stx, &fx, &dgx, &sty, &fy, &dgy, stp, f, &dg, &brackt, &
-		stmin, &stmax, &infoc);
-    }
-
-/*        FORCE A SUFFICIENT DECREASE IN THE SIZE OF THE */
-/*        INTERVAL OF UNCERTAINTY. */
-
-    if (brackt) {
-	if ((d__1 = sty - stx, abs(d__1)) >= p66 * width1) {
-	    *stp = stx + p5 * (sty - stx);
-	}
-	width1 = width;
-	width = (d__1 = sty - stx, abs(d__1));
-    }
-
-/*        END OF ITERATION. */
-
-    goto L30;
-
-/*     LAST LINE OF SUBROUTINE MCSRCH. */
-
-} /* mcsrch_ */
-
-/* Subroutine */ int mcstep_(doublereal *stx, doublereal *fx, doublereal *dx, 
-	doublereal *sty, doublereal *fy, doublereal *dy, doublereal *stp, 
-	doublereal *fp, doublereal *dp, logical *brackt, doublereal *stpmin, 
-	doublereal *stpmax, integer *info)
-{
-    /* System generated locals */
-    doublereal d__1, d__2, d__3;
-
-    /* Builtin functions */
-    double sqrt(doublereal);
-
-    /* Local variables */
-    static doublereal p, q, r__, s, sgnd, stpc, stpf, stpq, gamma, theta;
-    static logical bound;
-
-
-/*     SUBROUTINE MCSTEP */
-
-/*     THE PURPOSE OF MCSTEP IS TO COMPUTE A SAFEGUARDED STEP FOR */
-/*     A LINESEARCH AND TO UPDATE AN INTERVAL OF UNCERTAINTY FOR */
-/*     A MINIMIZER OF THE FUNCTION. */
-
-/*     THE PARAMETER STX CONTAINS THE STEP WITH THE LEAST FUNCTION */
-/*     VALUE. THE PARAMETER STP CONTAINS THE CURRENT STEP. IT IS */
-/*     ASSUMED THAT THE DERIVATIVE AT STX IS NEGATIVE IN THE */
-/*     DIRECTION OF THE STEP. IF BRACKT IS SET TRUE THEN A */
-/*     MINIMIZER HAS BEEN BRACKETED IN AN INTERVAL OF UNCERTAINTY */
-/*     WITH ENDPOINTS STX AND STY. */
-
-/*     THE SUBROUTINE STATEMENT IS */
-
-/*       SUBROUTINE MCSTEP(STX,FX,DX,STY,FY,DY,STP,FP,DP,BRACKT, */
-/*                        STPMIN,STPMAX,INFO) */
-
-/*     WHERE */
-
-/*       STX, FX, AND DX ARE VARIABLES WHICH SPECIFY THE STEP, */
-/*         THE FUNCTION, AND THE DERIVATIVE AT THE BEST STEP OBTAINED */
-/*         SO FAR. THE DERIVATIVE MUST BE NEGATIVE IN THE DIRECTION */
-/*         OF THE STEP, THAT IS, DX AND STP-STX MUST HAVE OPPOSITE */
-/*         SIGNS. ON OUTPUT THESE PARAMETERS ARE UPDATED APPROPRIATELY. */
-
-/*       STY, FY, AND DY ARE VARIABLES WHICH SPECIFY THE STEP, */
-/*         THE FUNCTION, AND THE DERIVATIVE AT THE OTHER ENDPOINT OF */
-/*         THE INTERVAL OF UNCERTAINTY. ON OUTPUT THESE PARAMETERS ARE */
-/*         UPDATED APPROPRIATELY. */
-
-/*       STP, FP, AND DP ARE VARIABLES WHICH SPECIFY THE STEP, */
-/*         THE FUNCTION, AND THE DERIVATIVE AT THE CURRENT STEP. */
-/*         IF BRACKT IS SET TRUE THEN ON INPUT STP MUST BE */
-/*         BETWEEN STX AND STY. ON OUTPUT STP IS SET TO THE NEW STEP. */
-
-/*       BRACKT IS A LOGICAL VARIABLE WHICH SPECIFIES IF A MINIMIZER */
-/*         HAS BEEN BRACKETED. IF THE MINIMIZER HAS NOT BEEN BRACKETED */
-/*         THEN ON INPUT BRACKT MUST BE SET FALSE. IF THE MINIMIZER */
-/*         IS BRACKETED THEN ON OUTPUT BRACKT IS SET TRUE. */
-
-/*       STPMIN AND STPMAX ARE INPUT VARIABLES WHICH SPECIFY LOWER */
-/*         AND UPPER BOUNDS FOR THE STEP. */
-
-/*       INFO IS AN INTEGER OUTPUT VARIABLE SET AS FOLLOWS: */
-/*         IF INFO = 1,2,3,4,5, THEN THE STEP HAS BEEN COMPUTED */
-/*         ACCORDING TO ONE OF THE FIVE CASES BELOW. OTHERWISE */
-/*         INFO = 0, AND THIS INDICATES IMPROPER INPUT PARAMETERS. */
-
-/*     SUBPROGRAMS CALLED */
-
-/*       FORTRAN-SUPPLIED ... ABS,MAX,MIN,SQRT */
-
-/*     ARGONNE NATIONAL LABORATORY. MINPACK PROJECT. JUNE 1983 */
-/*     JORGE J. MORE', DAVID J. THUENTE */
-
-    *info = 0;
-
-/*     CHECK THE INPUT PARAMETERS FOR ERRORS. */
-
-    if (*brackt && (*stp <= min(*stx,*sty) || *stp >= max(*stx,*sty)) || *dx *
-	     (*stp - *stx) >= 0.f || *stpmax < *stpmin) {
-	return 0;
-    }
-
-/*     DETERMINE IF THE DERIVATIVES HAVE OPPOSITE SIGN. */
-
-    sgnd = *dp * (*dx / abs(*dx));
-
-/*     FIRST CASE. A HIGHER FUNCTION VALUE. */
-/*     THE MINIMUM IS BRACKETED. IF THE CUBIC STEP IS CLOSER */
-/*     TO STX THAN THE QUADRATIC STEP, THE CUBIC STEP IS TAKEN, */
-/*     ELSE THE AVERAGE OF THE CUBIC AND QUADRATIC STEPS IS TAKEN. */
-
-    if (*fp > *fx) {
-	*info = 1;
-	bound = TRUE_;
-	theta = (*fx - *fp) * 3 / (*stp - *stx) + *dx + *dp;
-/* Computing MAX */
-	d__1 = abs(theta), d__2 = abs(*dx), d__1 = max(d__1,d__2), d__2 = abs(
-		*dp);
-	s = max(d__1,d__2);
-/* Computing 2nd power */
-	d__1 = theta / s;
-	gamma = s * sqrt(d__1 * d__1 - *dx / s * (*dp / s));
-	if (*stp < *stx) {
-	    gamma = -gamma;
-	}
-	p = gamma - *dx + theta;
-	q = gamma - *dx + gamma + *dp;
-	r__ = p / q;
-	stpc = *stx + r__ * (*stp - *stx);
-	stpq = *stx + *dx / ((*fx - *fp) / (*stp - *stx) + *dx) / 2 * (*stp - 
-		*stx);
-	if ((d__1 = stpc - *stx, abs(d__1)) < (d__2 = stpq - *stx, abs(d__2)))
-		 {
-	    stpf = stpc;
+	/* We assume the initial hessian matrix H_0 as the identity matrix. */
+	if (param->orthantwise_c == 0.) {
+		vecncpy(d, g, n);
 	} else {
-	    stpf = stpc + (stpq - stpc) / 2;
+		/* Compute the negative of psuedo-gradients. */
+		for (i = 0;i < n;++i) {
+			if (x[i] < 0.) {
+				/* Differentiable. */
+				d[i] = -g[i] + param->orthantwise_c;
+			} else if (0. < x[i]) {
+				/* Differentiable. */
+				d[i] = -g[i] - param->orthantwise_c;
+			} else {
+				if (g[i] < -param->orthantwise_c) {
+					/* Take the right partial derivative. */
+					d[i] = -g[i] - param->orthantwise_c;
+				} else if (param->orthantwise_c < g[i]) {
+					/* Take the left partial derivative. */
+					d[i] = -g[i] + param->orthantwise_c;
+				} else {
+					d[i] = 0.;
+				}
+			}
+		}
 	}
-	*brackt = TRUE_;
 
-/*     SECOND CASE. A LOWER FUNCTION VALUE AND DERIVATIVES OF */
-/*     OPPOSITE SIGN. THE MINIMUM IS BRACKETED. IF THE CUBIC */
-/*     STEP IS CLOSER TO STX THAN THE QUADRATIC (SECANT) STEP, */
-/*     THE CUBIC STEP IS TAKEN, ELSE THE QUADRATIC STEP IS TAKEN. */
+	/* Compute the initial step:
+		step = 1.0 / sqrt(vecdot(d, d, n))
+	 */
+	vecrnorm(&step, d, n);
 
-    } else if (sgnd < 0.f) {
-	*info = 2;
-	bound = FALSE_;
-	theta = (*fx - *fp) * 3 / (*stp - *stx) + *dx + *dp;
-/* Computing MAX */
-	d__1 = abs(theta), d__2 = abs(*dx), d__1 = max(d__1,d__2), d__2 = abs(
-		*dp);
-	s = max(d__1,d__2);
-/* Computing 2nd power */
-	d__1 = theta / s;
-	gamma = s * sqrt(d__1 * d__1 - *dx / s * (*dp / s));
-	if (*stp > *stx) {
-	    gamma = -gamma;
+	k = 1;
+	end = 0;
+	for (;;) {
+		/* Store the current position and gradient vectors. */
+		veccpy(xp, x, n);
+		veccpy(gp, g, n);
+
+		/* Search for an optimal step. */
+		ls = line_search(
+			n, x, &fx, g, d, &step, w, proc_evaluate, instance, param);
+		if (ls < 0) {
+			ret = ls;
+			goto lbfgs_exit;
+		}
+
+		/* Compute x and g norms. */
+		vecnorm(&gnorm, g, n);
+		vecnorm(&xnorm, x, n);
+
+		/* Report the progress. */
+		if (proc_progress) {
+			if (ret = proc_progress(instance, x, g, fx, xnorm, gnorm, step, n, k, ls)) {
+				goto lbfgs_exit;
+			}
+		}
+
+		/*
+			Convergence test.
+			The criterion is given by the following formula:
+				|g(x)| / \max(1, |x|) < \epsilon
+		 */
+		if (xnorm < 1.0) xnorm = 1.0;
+		if (gnorm / xnorm <= param->epsilon) {
+			/* Convergence. */
+			ret = 0;
+			break;
+		}
+
+		if (param->max_iterations != 0 && param->max_iterations < k+1) {
+			/* Maximum number of iterations. */
+			ret = LBFGSERR_MAXIMUMITERATION;
+			break;
+		}
+
+		/*
+			Update vectors s and y:
+				s_{k+1} = x_{k+1} - x_{k} = \step * d_{k}.
+				y_{k+1} = g_{k+1} - g_{k}.
+		 */
+		it = &lm[end];
+		vecdiff(it->s, x, xp, n);
+		vecdiff(it->y, g, gp, n);
+
+		/*
+			Compute scalars ys and yy:
+				ys = y^t \cdot s = 1 / \rho.
+				yy = y^t \cdot y.
+			Notice that yy is used for scaling the hessian matrix H_0 (Cholesky factor).
+		 */
+		vecdot(&ys, it->y, it->s, n);
+		vecdot(&yy, it->y, it->y, n);
+		it->ys = ys;
+
+		/*
+			Recursive formula to compute dir = -(H \cdot g).
+				This is described in page 779 of:
+				Jorge Nocedal.
+				Updating Quasi-Newton Matrices with Limited Storage.
+				Mathematics of Computation, Vol. 35, No. 151,
+				pp. 773--782, 1980.
+		 */
+		bound = (m <= k) ? m : k;
+		++k;
+		end = (end + 1) % m;
+
+		if (param->orthantwise_c == 0.) {
+			/* Compute the negative of gradients. */
+			vecncpy(d, g, n);
+		} else {
+			/* Compute the negative of psuedo-gradients. */
+			for (i = 0;i < n;++i) {
+				if (x[i] < 0.) {
+					/* Differentiable. */
+					d[i] = -g[i] + param->orthantwise_c;
+				} else if (0. < x[i]) {
+					/* Differentiable. */
+					d[i] = -g[i] - param->orthantwise_c;
+				} else {
+					if (g[i] < -param->orthantwise_c) {
+						/* Take the right partial derivative. */
+						d[i] = -g[i] - param->orthantwise_c;
+					} else if (param->orthantwise_c < g[i]) {
+						/* Take the left partial derivative. */
+						d[i] = -g[i] + param->orthantwise_c;
+					} else {
+						d[i] = 0.;
+					}
+				}
+			}
+			/* Store the steepest direction.*/
+			veccpy(w, d, n);
+		}
+
+		j = end;
+		for (i = 0;i < bound;++i) {
+			j = (j + m - 1) % m;	/* if (--j == -1) j = m-1; */
+			it = &lm[j];
+			/* \alpha_{j} = \rho_{j} s^{t}_{j} \cdot q_{k+1}. */
+			vecdot(&it->alpha, it->s, d, n);
+			it->alpha /= it->ys;
+			/* q_{i} = q_{i+1} - \alpha_{i} y_{i}. */
+			vecadd(d, it->y, -it->alpha, n);
+		}
+
+		vecscale(d, ys / yy, n);
+
+		for (i = 0;i < bound;++i) {
+			it = &lm[j];
+			/* \beta_{j} = \rho_{j} y^t_{j} \cdot \gamma_{i}. */
+			vecdot(&beta, it->y, d, n);
+			beta /= it->ys;
+			/* \gamma_{i+1} = \gamma_{i} + (\alpha_{j} - \beta_{j}) s_{j}. */
+			vecadd(d, it->s, it->alpha - beta, n);
+			j = (j + 1) % m;		/* if (++j == m) j = 0; */
+		}
+
+		/*
+			Constrain the search direction for orthant-wise updates.
+		 */
+		if (param->orthantwise_c != 0.) {
+			for (i = 0;i < n;++i) {
+				if (d[i] * w[i] <= 0) {
+					d[i] = 0;
+				}
+			}
+		}
+
+		/*
+			Now the search direction d is ready. We try step = 1 first.
+		 */
+		step = 1.0;
 	}
-	p = gamma - *dp + theta;
-	q = gamma - *dp + gamma + *dx;
-	r__ = p / q;
-	stpc = *stp + r__ * (*stx - *stp);
-	stpq = *stp + *dp / (*dp - *dx) * (*stx - *stp);
-	if ((d__1 = stpc - *stp, abs(d__1)) > (d__2 = stpq - *stp, abs(d__2)))
-		 {
-	    stpf = stpc;
+
+lbfgs_exit:
+	/* Return the final value of the objective function. */
+	if (ptr_fx != NULL) {
+		*ptr_fx = fx;
+	}
+
+	/* Free memory blocks used by this function. */
+	if (lm != NULL) {
+		for (i = 0;i < m;++i) {
+			vecfree(lm[i].s);
+			vecfree(lm[i].y);
+		}
+		vecfree(lm);
+	}
+	vecfree(w);
+	vecfree(d);
+	vecfree(gp);
+	vecfree(g);
+	vecfree(xp);
+
+	return ret;
+}
+
+
+
+static int line_search_backtracking(
+	int n,
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *f,
+	lbfgsfloatval_t *g,
+	lbfgsfloatval_t *s,
+	lbfgsfloatval_t *stp,
+	lbfgsfloatval_t *xp,
+	lbfgs_evaluate_t proc_evaluate,
+	void *instance,
+	const lbfgs_parameter_t *param
+	)
+{
+	int i, ret = 0, count = 0;
+	lbfgsfloatval_t width = 0.5, norm = 0.;
+	lbfgsfloatval_t finit, dginit = 0., dg, dgtest;
+
+	/* Check the input parameters for errors. */
+	if (*stp <= 0.) {
+		return LBFGSERR_INVALIDPARAMETERS;
+	}
+
+	/* Compute the initial gradient in the search direction. */
+	if (param->orthantwise_c != 0.) {
+		/* Use psuedo-gradients for orthant-wise updates. */
+		for (i = 0;i < n;++i) {
+			/* Notice that:
+				(-s[i] < 0)  <==>  (g[i] < -param->orthantwise_c)
+				(-s[i] > 0)  <==>  (param->orthantwise_c < g[i])
+			   as the result of the lbfgs() function for orthant-wise updates.
+			 */
+			if (s[i] != 0.) {
+				if (x[i] < 0.) {
+					/* Differentiable. */
+					dginit += s[i] * (g[i] - param->orthantwise_c);
+				} else if (0. < x[i]) {
+					/* Differentiable. */
+					dginit += s[i] * (g[i] + param->orthantwise_c);
+				} else if (s[i] < 0.) {
+					/* Take the left partial derivative. */
+					dginit += s[i] * (g[i] - param->orthantwise_c);
+				} else if (0. < s[i]) {
+					/* Take the right partial derivative. */
+					dginit += s[i] * (g[i] + param->orthantwise_c);
+				}
+			}
+		}
 	} else {
-	    stpf = stpq;
+		vecdot(&dginit, g, s, n);
 	}
-	*brackt = TRUE_;
 
-/*     THIRD CASE. A LOWER FUNCTION VALUE, DERIVATIVES OF THE */
-/*     SAME SIGN, AND THE MAGNITUDE OF THE DERIVATIVE DECREASES. */
-/*     THE CUBIC STEP IS ONLY USED IF THE CUBIC TENDS TO INFINITY */
-/*     IN THE DIRECTION OF THE STEP OR IF THE MINIMUM OF THE CUBIC */
-/*     IS BEYOND STP. OTHERWISE THE CUBIC STEP IS DEFINED TO BE */
-/*     EITHER STPMIN OR STPMAX. THE QUADRATIC (SECANT) STEP IS ALSO */
-/*     COMPUTED AND IF THE MINIMUM IS BRACKETED THEN THE THE STEP */
-/*     CLOSEST TO STX IS TAKEN, ELSE THE STEP FARTHEST AWAY IS TAKEN. */
-
-    } else if (abs(*dp) < abs(*dx)) {
-	*info = 3;
-	bound = TRUE_;
-	theta = (*fx - *fp) * 3 / (*stp - *stx) + *dx + *dp;
-/* Computing MAX */
-	d__1 = abs(theta), d__2 = abs(*dx), d__1 = max(d__1,d__2), d__2 = abs(
-		*dp);
-	s = max(d__1,d__2);
-
-/*        THE CASE GAMMA = 0 ONLY ARISES IF THE CUBIC DOES NOT TEND */
-/*        TO INFINITY IN THE DIRECTION OF THE STEP. */
-
-/* Computing MAX */
-/* Computing 2nd power */
-	d__3 = theta / s;
-	d__1 = 0., d__2 = d__3 * d__3 - *dx / s * (*dp / s);
-	gamma = s * sqrt((max(d__1,d__2)));
-	if (*stp > *stx) {
-	    gamma = -gamma;
+	/* Make sure that s points to a descent direction. */
+	if (0 < dginit) {
+		return LBFGSERR_INCREASEGRADIENT;
 	}
-	p = gamma - *dp + theta;
-	q = gamma + (*dx - *dp) + gamma;
-	r__ = p / q;
-	if (r__ < 0.f && gamma != 0.f) {
-	    stpc = *stp + r__ * (*stx - *stp);
-	} else if (*stp > *stx) {
-	    stpc = *stpmax;
+
+	/* The initial value of the objective function. */
+	finit = *f;
+	dgtest = param->ftol * dginit;
+
+	/* Copy the value of x to the work area. */
+	veccpy(xp, x, n);
+
+	for (;;) {
+		veccpy(x, xp, n);
+		vecadd(x, s, *stp, n);
+
+		if (param->orthantwise_c != 0.) {
+			/* The current point is projected onto the orthant of the initial one. */
+			for (i = 0;i < n;++i) {
+				if (x[i] * xp[i] < 0.) {
+					x[i] = 0.;
+				}
+			}
+		}
+
+		/* Evaluate the function and gradient values. */
+		*f = proc_evaluate(instance, x, g, n, *stp);
+		if (0. < param->orthantwise_c) {
+			/* Compute L1-regularization factor and add it to the object value. */
+			norm = 0.;
+			for (i = 0;i < n;++i) {
+				norm += fabs(x[i]);
+			}
+			*f += norm * param->orthantwise_c;
+		}
+
+		vecdot(&dg, g, s, n);
+		++count;
+
+		if (*f <= finit + *stp * dgtest) {
+			/* The sufficient decrease condition. */
+			return count;
+		}
+		if (*stp < param->min_step) {
+			/* The step is the minimum value. */
+			ret = LBFGSERR_MINIMUMSTEP;
+			break;
+		}
+		if (param->max_linesearch <= count) {
+			/* Maximum number of iteration. */
+			ret = LBFGSERR_MAXIMUMLINESEARCH;
+			break;
+		}
+
+		(*stp) *= width;
+	}
+
+	/* Revert to the previous position. */
+	veccpy(x, xp, n);
+	return ret;
+}
+
+
+
+static int line_search(
+	int n,
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *f,
+	lbfgsfloatval_t *g,
+	lbfgsfloatval_t *s,
+	lbfgsfloatval_t *stp,
+	lbfgsfloatval_t *wa,
+	lbfgs_evaluate_t proc_evaluate,
+	void *instance,
+	const lbfgs_parameter_t *param
+	)
+{
+	int i, count = 0;
+	int brackt, stage1, uinfo = 0;
+	lbfgsfloatval_t dg, norm;
+	lbfgsfloatval_t stx, fx, dgx;
+	lbfgsfloatval_t sty, fy, dgy;
+	lbfgsfloatval_t fxm, dgxm, fym, dgym, fm, dgm;
+	lbfgsfloatval_t finit, ftest1, dginit, dgtest;
+	lbfgsfloatval_t width, prev_width;
+	lbfgsfloatval_t stmin, stmax;
+
+	/* Check the input parameters for errors. */
+	if (*stp <= 0.) {
+		return LBFGSERR_INVALIDPARAMETERS;
+	}
+
+	/* Compute the initial gradient in the search direction. */
+	if (param->orthantwise_c != 0.) {
+		/* Use psuedo-gradients for orthant-wise updates. */
+		dginit = 0.;
+		for (i = 0;i < n;++i) {
+			/* Notice that:
+				(-s[i] < 0)  <==>  (g[i] < -param->orthantwise_c)
+				(-s[i] > 0)  <==>  (param->orthantwise_c < g[i])
+			   as the result of the lbfgs() function for orthant-wise updates.
+			 */
+			if (s[i] != 0.) {
+				if (x[i] < 0.) {
+					/* Differentiable. */
+					dginit += s[i] * (g[i] - param->orthantwise_c);
+				} else if (0. < x[i]) {
+					/* Differentiable. */
+					dginit += s[i] * (g[i] + param->orthantwise_c);
+				} else if (s[i] < 0.) {
+					/* Take the left partial derivative. */
+					dginit += s[i] * (g[i] - param->orthantwise_c);
+				} else if (0. < s[i]) {
+					/* Take the right partial derivative. */
+					dginit += s[i] * (g[i] + param->orthantwise_c);
+				}
+			}
+		}
 	} else {
-	    stpc = *stpmin;
+		vecdot(&dginit, g, s, n);
 	}
-	stpq = *stp + *dp / (*dp - *dx) * (*stx - *stp);
+
+	/* Make sure that s points to a descent direction. */
+	if (0 < dginit) {
+		return LBFGSERR_INCREASEGRADIENT;
+	}
+
+	/* Initialize local variables. */
+	brackt = 0;
+	stage1 = 1;
+	finit = *f;
+	dgtest = param->ftol * dginit;
+	width = param->max_step - param->min_step;
+	prev_width = 2.0 * width;
+
+	/* Copy the value of x to the work area. */
+	veccpy(wa, x, n);
+
+	/*
+		The variables stx, fx, dgx contain the values of the step,
+		function, and directional derivative at the best step.
+		The variables sty, fy, dgy contain the value of the step,
+		function, and derivative at the other endpoint of
+		the interval of uncertainty.
+		The variables stp, f, dg contain the values of the step,
+		function, and derivative at the current step.
+	*/
+	stx = sty = 0.;
+	fx = fy = finit;
+	dgx = dgy = dginit;
+
+	for (;;) {
+		/*
+			Set the minimum and maximum steps to correspond to the
+			present interval of uncertainty.
+		 */
+		if (brackt) {
+			stmin = min2(stx, sty);
+			stmax = max2(stx, sty);
+		} else {
+			stmin = stx;
+			stmax = *stp + 4.0 * (*stp - stx);
+		}
+
+		/* Clip the step in the range of [stpmin, stpmax]. */
+		if (*stp < param->min_step) *stp = param->min_step;
+		if (param->max_step < *stp) *stp = param->max_step;
+
+		/*
+			If an unusual termination is to occur then let
+			stp be the lowest point obtained so far.
+		 */
+		if ((brackt && ((*stp <= stmin || stmax <= *stp) || param->max_linesearch <= count + 1 || uinfo != 0)) || (brackt && (stmax - stmin <= param->xtol * stmax))) {
+			*stp = stx;
+		}
+
+		/*
+			Compute the current value of x:
+				x <- x + (*stp) * s.
+		 */
+		veccpy(x, wa, n);
+		vecadd(x, s, *stp, n);
+
+		if (param->orthantwise_c != 0.) {
+			/* The current point is projected onto the orthant of the previous one. */
+			for (i = 0;i < n;++i) {
+				if (x[i] * wa[i] < 0.) {
+					x[i] = 0.;
+				}
+			}
+		}
+
+		/* Evaluate the function and gradient values. */
+		*f = proc_evaluate(instance, x, g, n, *stp);
+		if (0. < param->orthantwise_c) {
+			/* Compute L1-regularization factor and add it to the object value. */
+			norm = 0.;
+			for (i = 0;i < n;++i) {
+				norm += fabs(x[i]);
+			}
+			*f += norm * param->orthantwise_c;
+		}
+
+		++count;
+
+		vecdot(&dg, g, s, n);
+		ftest1 = finit + *stp * dgtest;
+
+		/* Test for errors and convergence. */
+		if (brackt && ((*stp <= stmin || stmax <= *stp) || uinfo != 0)) {
+			/* Rounding errors prevent further progress. */
+			return LBFGSERR_ROUNDING_ERROR;
+		}
+		if (*stp == param->max_step && *f <= ftest1 && dg <= dgtest) {
+			/* The step is the maximum value. */
+			return LBFGSERR_MAXIMUMSTEP;
+		}
+		if (*stp == param->min_step && (ftest1 < *f || dgtest <= dg)) {
+			/* The step is the minimum value. */
+			return LBFGSERR_MINIMUMSTEP;
+		}
+		if (brackt && (stmax - stmin) <= param->xtol * stmax) {
+			/* Relative width of the interval of uncertainty is at most xtol. */
+			return LBFGSERR_WIDTHTOOSMALL;
+		}
+		if (param->max_linesearch <= count) {
+			/* Maximum number of iteration. */
+			return LBFGSERR_MAXIMUMLINESEARCH;
+		}
+		if (*f <= ftest1 && fabs(dg) <= param->gtol * (-dginit)) {
+			/* The sufficient decrease condition and the directional derivative condition hold. */
+			return count;
+		}
+
+		/*
+			In the first stage we seek a step for which the modified
+			function has a nonpositive value and nonnegative derivative.
+		 */
+		if (stage1 && *f <= ftest1 && min2(param->ftol, param->gtol) * dginit <= dg) {
+			stage1 = 0;
+		}
+
+		/*
+			A modified function is used to predict the step only if
+			we have not obtained a step for which the modified
+			function has a nonpositive function value and nonnegative
+			derivative, and if a lower function value has been
+			obtained but the decrease is not sufficient.
+		 */
+		if (stage1 && ftest1 < *f && *f <= fx) {
+		    /* Define the modified function and derivative values. */
+			fm = *f - *stp * dgtest;
+			fxm = fx - stx * dgtest;
+			fym = fy - sty * dgtest;
+			dgm = dg - dgtest;
+			dgxm = dgx - dgtest;
+			dgym = dgy - dgtest;
+
+			/*
+				Call update_trial_interval() to update the interval of
+				uncertainty and to compute the new step.
+			 */
+			uinfo = update_trial_interval(
+				&stx, &fxm, &dgxm,
+				&sty, &fym, &dgym,
+				stp, &fm, &dgm,
+				stmin, stmax, &brackt
+				);
+
+			/* Reset the function and gradient values for f. */
+			fx = fxm + stx * dgtest;
+			fy = fym + sty * dgtest;
+			dgx = dgxm + dgtest;
+			dgy = dgym + dgtest;
+		} else {
+			/*
+				Call update_trial_interval() to update the interval of
+				uncertainty and to compute the new step.
+			 */
+			uinfo = update_trial_interval(
+				&stx, &fx, &dgx,
+				&sty, &fy, &dgy,
+				stp, f, &dg,
+				stmin, stmax, &brackt
+				);
+		}
+
+		/*
+			Force a sufficient decrease in the interval of uncertainty.
+		 */
+		if (brackt) {
+			if (0.66 * prev_width <= fabs(sty - stx)) {
+				*stp = stx + 0.5 * (sty - stx);
+			}
+			prev_width = width;
+			width = fabs(sty - stx);
+		}
+	}
+
+	return LBFGSERR_LOGICERROR;
+}
+
+
+
+/**
+ * Define the local variables for computing minimizers.
+ */
+#define	USES_MINIMIZER \
+	lbfgsfloatval_t a, d, gamma, theta, p, q, r, s;
+
+/**
+ * Find a minimizer of an interpolated cubic function.
+ *	@param	cm		The minimizer of the interpolated cubic.
+ *	@param	u		The value of one point, u.
+ *	@param	fu		The value of f(u).
+ *	@param	du		The value of f'(u).
+ *	@param	v		The value of another point, v.
+ *	@param	fv		The value of f(v).
+ *	@param	du		The value of f'(v).
+ */
+#define	CUBIC_MINIMIZER(cm, u, fu, du, v, fv, dv) \
+	d = (v) - (u); \
+	theta = ((fu) - (fv)) * 3 / d + (du) + (dv); \
+	p = fabs(theta); \
+	q = fabs(du); \
+	r = fabs(dv); \
+	s = max3(p, q, r); \
+	/* gamma = s*sqrt((theta/s)**2 - (du/s) * (dv/s)) */ \
+	a = theta / s; \
+	gamma = s * sqrt(a * a - ((du) / s) * ((dv) / s)); \
+	if ((v) < (u)) gamma = -gamma; \
+	p = gamma - (du) + theta; \
+	q = gamma - (du) + gamma + (dv); \
+	r = p / q; \
+	(cm) = (u) + r * d;
+
+/**
+ * Find a minimizer of an interpolated cubic function.
+ *	@param	cm		The minimizer of the interpolated cubic.
+ *	@param	u		The value of one point, u.
+ *	@param	fu		The value of f(u).
+ *	@param	du		The value of f'(u).
+ *	@param	v		The value of another point, v.
+ *	@param	fv		The value of f(v).
+ *	@param	du		The value of f'(v).
+ *	@param	xmin	The maximum value.
+ *	@param	xmin	The minimum value.
+ */
+#define	CUBIC_MINIMIZER2(cm, u, fu, du, v, fv, dv, xmin, xmax) \
+	d = (v) - (u); \
+	theta = ((fu) - (fv)) * 3 / d + (du) + (dv); \
+	p = fabs(theta); \
+	q = fabs(du); \
+	r = fabs(dv); \
+	s = max3(p, q, r); \
+	/* gamma = s*sqrt((theta/s)**2 - (du/s) * (dv/s)) */ \
+	a = theta / s; \
+	gamma = s * sqrt(max2(0, a * a - ((du) / s) * ((dv) / s))); \
+	if ((u) < (v)) gamma = -gamma; \
+	p = gamma - (dv) + theta; \
+	q = gamma - (dv) + gamma + (du); \
+	r = p / q; \
+	if (r < 0. && gamma != 0.) { \
+		(cm) = (v) - r * d; \
+	} else if (a < 0) { \
+		(cm) = (xmax); \
+	} else { \
+		(cm) = (xmin); \
+	}
+
+/**
+ * Find a minimizer of an interpolated quadratic function.
+ *	@param	qm		The minimizer of the interpolated quadratic.
+ *	@param	u		The value of one point, u.
+ *	@param	fu		The value of f(u).
+ *	@param	du		The value of f'(u).
+ *	@param	v		The value of another point, v.
+ *	@param	fv		The value of f(v).
+ */
+#define	QUARD_MINIMIZER(qm, u, fu, du, v, fv) \
+	a = (v) - (u); \
+	(qm) = (u) + (du) / (((fu) - (fv)) / a + (du)) / 2 * a;
+
+/**
+ * Find a minimizer of an interpolated quadratic function.
+ *	@param	qm		The minimizer of the interpolated quadratic.
+ *	@param	u		The value of one point, u.
+ *	@param	du		The value of f'(u).
+ *	@param	v		The value of another point, v.
+ *	@param	dv		The value of f'(v).
+ */
+#define	QUARD_MINIMIZER2(qm, u, du, v, dv) \
+	a = (u) - (v); \
+	(qm) = (v) + (dv) / ((dv) - (du)) * a;
+
+/**
+ * Update a safeguarded trial value and interval for line search.
+ *
+ *	The parameter x represents the step with the least function value.
+ *	The parameter t represents the current step. This function assumes
+ *	that the derivative at the point of x in the direction of the step.
+ *	If the bracket is set to true, the minimizer has been bracketed in
+ *	an interval of uncertainty with endpoints between x and y.
+ *
+ *	@param	x		The pointer to the value of one endpoint.
+ *	@param	fx		The pointer to the value of f(x).
+ *	@param	dx		The pointer to the value of f'(x).
+ *	@param	y		The pointer to the value of another endpoint.
+ *	@param	fy		The pointer to the value of f(y).
+ *	@param	dy		The pointer to the value of f'(y).
+ *	@param	t		The pointer to the value of the trial value, t.
+ *	@param	ft		The pointer to the value of f(t).
+ *	@param	dt		The pointer to the value of f'(t).
+ *	@param	tmin	The minimum value for the trial value, t.
+ *	@param	tmax	The maximum value for the trial value, t.
+ *	@param	brackt	The pointer to the predicate if the trial value is
+ *					bracketed.
+ *	@retval	int		Status value. Zero indicates a normal termination.
+ *	
+ *	@see
+ *		Jorge J. More and David J. Thuente. Line search algorithm with
+ *		guaranteed sufficient decrease. ACM Transactions on Mathematical
+ *		Software (TOMS), Vol 20, No 3, pp. 286-307, 1994.
+ */
+static int update_trial_interval(
+	lbfgsfloatval_t *x,
+	lbfgsfloatval_t *fx,
+	lbfgsfloatval_t *dx,
+	lbfgsfloatval_t *y,
+	lbfgsfloatval_t *fy,
+	lbfgsfloatval_t *dy,
+	lbfgsfloatval_t *t,
+	lbfgsfloatval_t *ft,
+	lbfgsfloatval_t *dt,
+	const lbfgsfloatval_t tmin,
+	const lbfgsfloatval_t tmax,
+	int *brackt
+	)
+{
+	int bound;
+	int dsign = fsigndiff(dt, dx);
+	lbfgsfloatval_t mc;	/* minimizer of an interpolated cubic. */
+	lbfgsfloatval_t mq;	/* minimizer of an interpolated quadratic. */
+	lbfgsfloatval_t newt;	/* new trial value. */
+	USES_MINIMIZER;		/* for CUBIC_MINIMIZER and QUARD_MINIMIZER. */
+
+	/* Check the input parameters for errors. */
 	if (*brackt) {
-	    if ((d__1 = *stp - stpc, abs(d__1)) < (d__2 = *stp - stpq, abs(
-		    d__2))) {
-		stpf = stpc;
-	    } else {
-		stpf = stpq;
-	    }
+		if (*t <= min2(*x, *y) || max2(*x, *y) <= *t) {
+			/* The trival value t is out of the interval. */
+			return LBFGSERR_OUTOFINTERVAL;
+		}
+		if (0. <= *dx * (*t - *x)) {
+			/* The function must decrease from x. */
+			return LBFGSERR_INCREASEGRADIENT;
+		}
+		if (tmax < tmin) {
+			/* Incorrect tmin and tmax specified. */
+			return LBFGSERR_INCORRECT_TMINMAX;
+		}
+	}
+
+	/*
+		Trial value selection.
+	 */
+	if (*fx < *ft) {
+		/*
+			Case 1: a higher function value.
+			The minimum is brackt. If the cubic minimizer is closer
+			to x than the quadratic one, the cubic one is taken, else
+			the average of the minimizers is taken.
+		 */
+		*brackt = 1;
+		bound = 1;
+		CUBIC_MINIMIZER(mc, *x, *fx, *dx, *t, *ft, *dt);
+		QUARD_MINIMIZER(mq, *x, *fx, *dx, *t, *ft);
+		if (fabs(mc - *x) < fabs(mq - *x)) {
+			newt = mc;
+		} else {
+			newt = mc + 0.5 * (mq - mc);
+		}
+	} else if (dsign) {
+		/*
+			Case 2: a lower function value and derivatives of
+			opposite sign. The minimum is brackt. If the cubic
+			minimizer is closer to x than the quadratic (secant) one,
+			the cubic one is taken, else the quadratic one is taken.
+		 */
+		*brackt = 1;
+		bound = 0;
+		CUBIC_MINIMIZER(mc, *x, *fx, *dx, *t, *ft, *dt);
+		QUARD_MINIMIZER2(mq, *x, *dx, *t, *dt);
+		if (fabs(mc - *t) > fabs(mq - *t)) {
+			newt = mc;
+		} else {
+			newt = mq;
+		}
+	} else if (fabs(*dt) < fabs(*dx)) {
+		/*
+			Case 3: a lower function value, derivatives of the
+			same sign, and the magnitude of the derivative decreases.
+			The cubic minimizer is only used if the cubic tends to
+			infinity in the direction of the minimizer or if the minimum
+			of the cubic is beyond t. Otherwise the cubic minimizer is
+			defined to be either tmin or tmax. The quadratic (secant)
+			minimizer is also computed and if the minimum is brackt
+			then the the minimizer closest to x is taken, else the one
+			farthest away is taken.
+		 */
+		bound = 1;
+		CUBIC_MINIMIZER2(mc, *x, *fx, *dx, *t, *ft, *dt, tmin, tmax);
+		QUARD_MINIMIZER2(mq, *x, *dx, *t, *dt);
+		if (*brackt) {
+			if (fabs(*t - mc) < fabs(*t - mq)) {
+				newt = mc;
+			} else {
+				newt = mq;
+			}
+		} else {
+			if (fabs(*t - mc) > fabs(*t - mq)) {
+				newt = mc;
+			} else {
+				newt = mq;
+			}
+		}
 	} else {
-	    if ((d__1 = *stp - stpc, abs(d__1)) > (d__2 = *stp - stpq, abs(
-		    d__2))) {
-		stpf = stpc;
-	    } else {
-		stpf = stpq;
-	    }
+		/*
+			Case 4: a lower function value, derivatives of the
+			same sign, and the magnitude of the derivative does
+			not decrease. If the minimum is not brackt, the step
+			is either tmin or tmax, else the cubic minimizer is taken.
+		 */
+		bound = 0;
+		if (*brackt) {
+			CUBIC_MINIMIZER(newt, *t, *ft, *dt, *y, *fy, *dy);
+		} else if (*x < *t) {
+			newt = tmax;
+		} else {
+			newt = tmin;
+		}
 	}
 
-/*     FOURTH CASE. A LOWER FUNCTION VALUE, DERIVATIVES OF THE */
-/*     SAME SIGN, AND THE MAGNITUDE OF THE DERIVATIVE DOES */
-/*     NOT DECREASE. IF THE MINIMUM IS NOT BRACKETED, THE STEP */
-/*     IS EITHER STPMIN OR STPMAX, ELSE THE CUBIC STEP IS TAKEN. */
+	/*
+		Update the interval of uncertainty. This update does not
+		depend on the new step or the case analysis above.
 
-    } else {
-	*info = 4;
-	bound = FALSE_;
-	if (*brackt) {
-	    theta = (*fp - *fy) * 3 / (*sty - *stp) + *dy + *dp;
-/* Computing MAX */
-	    d__1 = abs(theta), d__2 = abs(*dy), d__1 = max(d__1,d__2), d__2 = 
-		    abs(*dp);
-	    s = max(d__1,d__2);
-/* Computing 2nd power */
-	    d__1 = theta / s;
-	    gamma = s * sqrt(d__1 * d__1 - *dy / s * (*dp / s));
-	    if (*stp > *sty) {
-		gamma = -gamma;
-	    }
-	    p = gamma - *dp + theta;
-	    q = gamma - *dp + gamma + *dy;
-	    r__ = p / q;
-	    stpc = *stp + r__ * (*sty - *stp);
-	    stpf = stpc;
-	} else if (*stp > *stx) {
-	    stpf = *stpmax;
+		- Case a: if f(x) < f(t),
+			x <- x, y <- t.
+		- Case b: if f(t) <= f(x) && f'(t)*f'(x) > 0,
+			x <- t, y <- y.
+		- Case c: if f(t) <= f(x) && f'(t)*f'(x) < 0, 
+			x <- t, y <- x.
+	 */
+	if (*fx < *ft) {
+		/* Case a */
+		*y = *t;
+		*fy = *ft;
+		*dy = *dt;
 	} else {
-	    stpf = *stpmin;
+		/* Case c */
+		if (dsign) {
+			*y = *x;
+			*fy = *fx;
+			*dy = *dx;
+		}
+		/* Cases b and c */
+		*x = *t;
+		*fx = *ft;
+		*dx = *dt;
 	}
-    }
 
-/*     UPDATE THE INTERVAL OF UNCERTAINTY. THIS UPDATE DOES NOT */
-/*     DEPEND ON THE NEW STEP OR THE CASE ANALYSIS ABOVE. */
+	/* Clip the new trial value in [tmin, tmax]. */
+	if (tmax < newt) newt = tmax;
+	if (newt < tmin) newt = tmin;
 
-    if (*fp > *fx) {
-	*sty = *stp;
-	*fy = *fp;
-	*dy = *dp;
-    } else {
-	if (sgnd < 0.f) {
-	    *sty = *stx;
-	    *fy = *fx;
-	    *dy = *dx;
+	/*
+		Redefine the new trial value if it is close to the upper bound
+		of the interval.
+	 */
+	if (*brackt && bound) {
+		mq = *x + 0.66 * (*y - *x);
+		if (*x < *y) {
+			if (mq < newt) newt = mq;
+		} else {
+			if (newt < mq) newt = mq;
+		}
 	}
-	*stx = *stp;
-	*fx = *fp;
-	*dx = *dp;
-    }
 
-/*     COMPUTE THE NEW STEP AND SAFEGUARD IT. */
-
-    stpf = min(*stpmax,stpf);
-    stpf = max(*stpmin,stpf);
-    *stp = stpf;
-    if (*brackt && bound) {
-	if (*sty > *stx) {
-/* Computing MIN */
-	    d__1 = *stx + (*sty - *stx) * .66f;
-	    *stp = min(d__1,*stp);
-	} else {
-/* Computing MAX */
-	    d__1 = *stx + (*sty - *stx) * .66f;
-	    *stp = max(d__1,*stp);
-	}
-    }
-    return 0;
-
-/*     LAST LINE OF SUBROUTINE MCSTEP. */
-
-} /* mcstep_ */
-
+	/* Return the new trial value. */
+	*t = newt;
+	return 0;
+}

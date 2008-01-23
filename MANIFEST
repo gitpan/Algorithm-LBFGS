@@ -1,10 +1,17 @@
+arithmetic_ansi.h
+arithmetic_sse_double.h
+arithmetic_sse_float.h
 Changes
 lbfgs.c
+lbfgs.h
 LBFGS.xs
 lib/Algorithm/LBFGS.pm
 Makefile.PL
 MANIFEST
 ppport.h
 README
-t/01-general.t
+t/01-parameter.t
+t/02-optimization.t
+t/03-monitor.t
+t/LBFGS.pm
 META.yml                                 Module meta-data (added by MakeMaker)

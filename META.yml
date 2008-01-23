@@ -1,8 +1,8 @@
 --- #YAML:1.0
 name:                Algorithm-LBFGS
-version:             0.02
+version:             0.10
 abstract:            Perl extension for L-BFGS 
-license:             perl
+license:             mit
 generated_by:        ExtUtils::MakeMaker version 6.36
 distribution_type:   module
 requires:     

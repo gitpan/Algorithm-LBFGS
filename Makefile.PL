@@ -8,9 +8,9 @@ WriteMakefile(
     ($] >= 5.005 ?
       (ABSTRACT_FROM  => 'lib/Algorithm/LBFGS.pm',
        AUTHOR         => 'Laye Suen <laye@cpan.org>') : ()),
-    LIBS              => ['-lm -lf2c'],
+    LIBS              => ['-lm'],
     DEFINE            => '',
     INC               => '-I.',
     OBJECT            => '$(O_FILES)',
-    LICENSE           => 'perl'
+    LICENSE           => 'mit',
 );
