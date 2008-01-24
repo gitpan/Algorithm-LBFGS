@@ -11,8 +11,6 @@
 
 #include "lbfgs.h"
 
-void MAIN__() {}
-
 #define newSVpv_(x) newSVpv(x, strlen(x))
 
 /**************************************************************************

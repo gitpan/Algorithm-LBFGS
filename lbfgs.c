@@ -76,6 +76,11 @@ licence.
 typedef unsigned int uint32_t;
 #endif/*_MSC_VER*/
 
+/* this block is added by laye */
+#ifndef _MSC_VER
+#include <stdint.h>
+#endif/*_MSC_VER*/
+
 #if	defined(USE_SSE) && defined(__SSE__) && LBFGS_FLOAT == 32
 /* Use SSE optimization for 32bit float precision. */
 #include "arithmetic_sse_float.h"

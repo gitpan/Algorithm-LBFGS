@@ -33,6 +33,12 @@
 #include <intrin.h>
 #endif
 
+/* this block is added by laye */
+#ifndef _MSC_VER
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#endif
+
 #if		LBFGS_FLOAT == 32 && LBFGS_IEEE_FLOAT
 #define	fsigndiff(x, y)	(((*(uint32_t*)(x)) ^ (*(uint32_t*)(y))) & 0x80000000U)
 #else

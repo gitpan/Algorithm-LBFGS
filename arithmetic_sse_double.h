@@ -33,6 +33,10 @@
 #include <intrin.h>
 #endif
 
+#ifndef _MSC_VER
+#include <emmintrin.h>
+#endif
+
 inline static void* vecalloc(size_t size)
 {
 	void *memblock = _aligned_malloc(size, 16);

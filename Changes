@@ -1,5 +1,14 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.11  Web Jan 24 16:52:00 2008
+	- Some small fixes
+		- converted the line breaks in the C source files to Unix 
+		  style. The former DOS style line breaks make the module
+		  failed to be compiled on some platforms
+		- rewrote Makefile.PL by Module::Install
+		- reorganized the structure of the documentation
+		- add a license file
+
 0.10  Wed Jan 23 20:28:00 2008
 	- A totally refactoring
 		- uses liblbfgs instead of the f2c version of lbfgs.f

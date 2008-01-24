@@ -4,7 +4,7 @@ use 5.008008;
 use strict;
 use warnings;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 require XSLoader;
 XSLoader::load('Algorithm::LBFGS', $VERSION);
@@ -154,100 +154,7 @@ If no parameter is specified explicitly, their default values are used.
 The parameter can be changed after the creation of the optimizer by 
 L</"set_param">. Also, they can be queryed by L</"get_param">.
 
-A list of all parameters is as following:
-
-=head3 m
-
-The number of corrections to approximate the inverse hessian matrix.
-
-The L-BFGS algorithm stores the computation results of previous L</"m">
-iterations to approximate the inverse hessian matrix of the current
-iteration. This parameter controls the size of the limited memories
-(corrections). The default value is 6. Values less than 3 are not
-recommended. Large values will result in excessive computing time. 
-
-=head3 epsilon
-
-Epsilon for convergence test.
-
-This parameter determines the accuracy with which the solution is to be
-found. A minimization terminates when
-  
-  ||grad f(x)|| < epsilon * max(1, ||x||)
-
-where ||.|| denotes the Euclidean (L2) norm. The default value is 1e-5. 
-
-=head3 max_iterations
-
-The maximum number of iterations.
-
-The L-BFGS algorithm terminates an optimization process with
-L</"LBFGSERR_MAXIMUMITERATION"> status code when the iteration count
-exceedes this parameter. Setting this parameter to zero continues an
-optimization process until a convergence or error. The default value is 0. 
-
-=head3 max_linesearch
-
-The maximum number of trials for the line search.
-
-This parameter controls the number of function and gradients evaluations
-per iteration for the line search routine. The default value is 20. 
-
-=head3 min_step
-
-The minimum step of the line search routine.
-
-The default value is 1e-20. This value need not be modified unless the
-exponents are too large for the machine being used, or unless the problem
-is extremely badly scaled (in which case the exponents should be increased).
-
-=head3 max_step
-
-The maximum step of the line search.
-
-The default value is 1e+20. This value need not be modified unless the
-exponents are too large for the machine being used, or unless the problem
-is extremely badly scaled (in which case the exponents should be increased).
-
-=head3 ftol
-
-A parameter to control the accuracy of the line search routine.
-
-The default value is 1e-4. This parameter should be greater than zero and
-smaller than 0.5. 
-
-=head3 gtol
-
-A parameter to control the accuracy of the line search routine.
-
-The default value is 0.9. If the function and gradient evaluations are
-inexpensive with respect to the cost of the iteration (which is sometimes
-the case when solving very large problems) it may be advantageous to set
-this parameter to a small value. A typical small value is 0.1. This
-parameter shuold be greater than the ftol parameter (1e-4) and smaller than
-1.0. 
-
-=head3 xtol
-
-The machine precision for floating-point values.
-
-This parameter must be a positive value set by a client program to estimate
-the machine precision. The line search routine will terminate with the
-status code (L</"LBFGSERR_ROUNDING_ERROR">) if the relative width of the
-interval of uncertainty is less than this parameter. 
-
-=head3 orthantwise_c
-
-Coeefficient for the L1 norm of variables.
-
-This parameter should be set to zero for standard minimization problems.
-Setting this parameter to a positive value minimizes the objective function
-f(x) combined with the L1 norm |x| of the variables, f(x) + c|x|.
-This parameter is the coeefficient for the |x|, i.e., c. As the L1
-norm |x| is not differentiable at zero, the module modify function and
-gradient evaluations from a client program suitably; a client program thus
-have only to return the function value f(x) and gradients grad f(x) as
-usual. The default value is zero. 
+Please refer to the L</"List of Parameters"> for details about parameters.
 
 =head2 get_param
 
@@ -379,7 +286,115 @@ Get the status of previous call of L</"fmin">.
   # print the status out
   print $o->get_status;
 
-The status code is a string, which could be one of the following:
+The status code is a string, which could be one in the
+L</"List of Status Codes">.
+
+=head2 status_ok
+
+This is a shortcut of saying L</"get_status"> eq L</"LBFGS_OK">.
+
+  ...
+
+  if ($o->fmin(...), $o->status_ok) {
+      ...
+  }
+
+=head2 List of Parameters
+
+=head3 m
+
+The number of corrections to approximate the inverse hessian matrix.
+
+The L-BFGS algorithm stores the computation results of previous L</"m">
+iterations to approximate the inverse hessian matrix of the current
+iteration. This parameter controls the size of the limited memories
+(corrections). The default value is 6. Values less than 3 are not
+recommended. Large values will result in excessive computing time. 
+
+=head3 epsilon
+
+Epsilon for convergence test.
+
+This parameter determines the accuracy with which the solution is to be
+found. A minimization terminates when
+  
+  ||grad f(x)|| < epsilon * max(1, ||x||)
+
+where ||.|| denotes the Euclidean (L2) norm. The default value is 1e-5. 
+
+=head3 max_iterations
+
+The maximum number of iterations.
+
+The L-BFGS algorithm terminates an optimization process with
+L</"LBFGSERR_MAXIMUMITERATION"> status code when the iteration count
+exceedes this parameter. Setting this parameter to zero continues an
+optimization process until a convergence or error. The default value is 0. 
+
+=head3 max_linesearch
+
+The maximum number of trials for the line search.
+
+This parameter controls the number of function and gradients evaluations
+per iteration for the line search routine. The default value is 20. 
+
+=head3 min_step
+
+The minimum step of the line search routine.
+
+The default value is 1e-20. This value need not be modified unless the
+exponents are too large for the machine being used, or unless the problem
+is extremely badly scaled (in which case the exponents should be increased).
+
+=head3 max_step
+
+The maximum step of the line search.
+
+The default value is 1e+20. This value need not be modified unless the
+exponents are too large for the machine being used, or unless the problem
+is extremely badly scaled (in which case the exponents should be increased).
+
+=head3 ftol
+
+A parameter to control the accuracy of the line search routine.
+
+The default value is 1e-4. This parameter should be greater than zero and
+smaller than 0.5. 
+
+=head3 gtol
+
+A parameter to control the accuracy of the line search routine.
+
+The default value is 0.9. If the function and gradient evaluations are
+inexpensive with respect to the cost of the iteration (which is sometimes
+the case when solving very large problems) it may be advantageous to set
+this parameter to a small value. A typical small value is 0.1. This
+parameter shuold be greater than the ftol parameter (1e-4) and smaller than
+1.0. 
+
+=head3 xtol
+
+The machine precision for floating-point values.
+
+This parameter must be a positive value set by a client program to estimate
+the machine precision. The line search routine will terminate with the
+status code (L</"LBFGSERR_ROUNDING_ERROR">) if the relative width of the
+interval of uncertainty is less than this parameter. 
+
+=head3 orthantwise_c
+
+Coeefficient for the L1 norm of variables.
+
+This parameter should be set to zero for standard minimization problems.
+Setting this parameter to a positive value minimizes the objective function
+f(x) combined with the L1 norm |x| of the variables, f(x) + c|x|.
+This parameter is the coeefficient for the |x|, i.e., c. As the L1
+norm |x| is not differentiable at zero, the module modify function and
+gradient evaluations from a client program suitably; a client program thus
+have only to return the function value f(x) and gradients grad f(x) as
+usual. The default value is zero. 
+
+=head2 List of Status Codes
 
 =head3 LBFGS_OK
 
@@ -479,16 +494,6 @@ A logic error (negative line-search step) occurred.
 
 The current search direction increases the objective function value. 
 
-=head2 status_ok
-
-This is a shortcut of saying L</"get_status"> eq L</"LBFGS_OK">.
-
-  ...
-
-  if ($o->fmin(...), $o->status_ok) {
-      ...
-  }
-
 =head1 SEE ALSO
 
 L<PDL>, L<PDL::Opt::NonLinear>
@@ -499,7 +504,11 @@ Laye Suen, E<lt>laye@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2008 by Laye Suen
+Copyright (C) 1990, Jorge Nocedal
+
+Copyright (C) 2007, Naoaki Okazaki
+
+Copyright (C) 2008, Laye Suen
 
 This library is distributed under the term of the MIT license.
 

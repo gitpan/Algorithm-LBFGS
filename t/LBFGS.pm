@@ -36,7 +36,7 @@ sub norm2(@) {
     return sqrt($r);
 }
 
-my ($o, $log, $eps);
+our ($o, $log, $eps);
 
 sub my_eval { return Dumper(eval(shift)) }
 
