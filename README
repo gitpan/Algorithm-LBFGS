@@ -62,7 +62,7 @@ DESCRIPTION
     Change the values of one or several parameters.
 
        my $o = Algorithm::LBFGS->new;
-       print $o->set_param(epsilon => 1e-6, m => 7);
+       $o->set_param(epsilon => 1e-6, m => 7);
 
   fmin
     The prototype of "fmin" is like
@@ -136,7 +136,7 @@ DESCRIPTION
     or stop. "fmin" continues to the next iteration when "s=0", otherwise,
     it terminates with status code "LBFGSERR_CANCELED".
 
-    The client program can also pass string value to "progress_cb", which
+    The client program can also pass string values to "progress_cb", which
     means it want to use a predefined progress callback subroutine. There
     are two predefined progress callback subroutines, 'verbose' and
     'logging'. 'verbose' just prints out all information of each iteration,
@@ -174,8 +174,8 @@ DESCRIPTION
       # print the status out
       print $o->get_status;
 
-    The status code is a string, which could be one in the "List of Status
-    Codes".
+    The status code is a string, which could be one of those in the "List of
+    Status Codes".
 
   status_ok
     This is a shortcut of saying "get_status" eq "LBFGS_OK".

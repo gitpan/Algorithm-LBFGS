@@ -1,5 +1,12 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.12  Thu Jan 31 18:29:00 2008
+	- Compatibility with some non-C99 compilers
+		- Much thanks to Taro Nishino, now the module can be built
+		  by some of the non-C99 compilers, e.g., Microsoft C/C++ 
+		  Compiler.
+	- Small refactoring on the test suite 
+
 0.11  Web Jan 24 16:52:00 2008
 	- Some small fixes
 		- converted the line breaks in the C source files to Unix 

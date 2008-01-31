@@ -19,7 +19,7 @@ inc/Test/Builder/Module.pm
 inc/Test/More.pm
 lbfgs.c
 lbfgs.h
-LBFGS.xs
+Algorithm-LBFGS.xs
 lib/Algorithm/LBFGS.pm
 LICENSE
 Makefile.PL
@@ -29,5 +29,5 @@ ppport.h
 README
 t/01-parameter.t
 t/02-optimization.t
-t/03-monitor.t
+t/03-progress.t
 t/LBFGS.pm

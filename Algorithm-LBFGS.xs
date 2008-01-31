@@ -18,7 +18,7 @@
  **************************************************************************/
 
 /* Call a perl subroutine pointed by sub_ref in an ARRAY context,
- * the SVs returned in rets should be release manually */
+ * the SVs returned in rets should be released manually */
 void call_perl_sub(
     SV*                      sub_ref,
     SV**                     args,
@@ -46,8 +46,8 @@ void call_perl_sub(
     LEAVE;
 }
 
-/* Evaluating callback for L-BFGS */
-lbfgsfloatval_t lbfgs_evaluate(
+/* Evaluation callback for L-BFGS */
+lbfgsfloatval_t lbfgs_evaluation_cb(
     void*                    instance,
     const lbfgsfloatval_t*   x,
     lbfgsfloatval_t*         g,
@@ -55,17 +55,21 @@ lbfgsfloatval_t lbfgs_evaluate(
     const lbfgsfloatval_t    step)
 {
     int i;
-    /* fetch refs to user evaluating sub and extra data */
-    SV* lbfgs_eval = ((SV**)instance)[0];
-    SV* user_data = ((SV**)instance)[2];
+    SV *lbfgs_eval, *user_data;
+    SV **args, **rets;
+    AV *av_x;
+    lbfgsfloatval_t f;
+    /* fetch refs to user evaluation callback and extra data */
+    lbfgs_eval = ((SV**)instance)[0];
+    user_data = ((SV**)instance)[2];
     /* create an mortal AV av_x from the C array x */
-    AV* av_x = (AV*)sv_2mortal((SV*)newAV());
+    av_x = (AV*)sv_2mortal((SV*)newAV());
     av_extend(av_x, n - 1);
     for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
     /* allocate space for arguments and return values */
-    SV** args = (SV**)malloc(3 * sizeof(SV*));
-    SV** rets = (SV**)malloc(2 * sizeof(SV*));
-    /* call the user evaluating sub */
+    args = (SV**)malloc(3 * sizeof(SV*));
+    rets = (SV**)malloc(2 * sizeof(SV*));
+    /* call the user evaluation callback */
     args[0] = sv_2mortal(newRV_inc((SV*)av_x));
     args[1] = sv_2mortal(newSVnv(step));
     args[2] = user_data;
@@ -73,7 +77,7 @@ lbfgsfloatval_t lbfgs_evaluate(
     /* get the function value and gradient vector from return values */
     for (i = 0; i < n; i++)
         g[i] = SvNV(*av_fetch((AV*)SvRV(rets[1]), i, 0));
-    lbfgsfloatval_t f = SvNV(rets[0]);
+    f = SvNV(rets[0]);
     /* release space of arguments and return values */
     SvREFCNT_dec(rets[0]);
     SvREFCNT_dec(rets[1]);
@@ -82,8 +86,8 @@ lbfgsfloatval_t lbfgs_evaluate(
     return f;
 }
 
-/* Progress monitor callback for L-BFGS */
-int lbfgs_progress(
+/* Progress callback for L-BFGS */
+int lbfgs_progress_cb(
     void*                    instance,
     const lbfgsfloatval_t*   x,
     const lbfgsfloatval_t*   g,
@@ -95,19 +99,22 @@ int lbfgs_progress(
     int                      k,
     int                      ls)
 {
-    int i;
-    /* fetch refs to the user progress monitor sub and extra data */
-    SV* lbfgs_prgr = ((SV**)instance)[1];
-    SV* user_data = ((SV**)instance)[2];
+    int i, r;
+    SV *lbfgs_prgr, *user_data;
+    SV **args, **rets;
+    AV *av_x, *av_g;
+    /* fetch refs to the user progress callback and extra data */
+    lbfgs_prgr = ((SV**)instance)[1];
+    user_data = ((SV**)instance)[2];
     /* create mortal AVs for C array x and g */
-    AV* av_x = (AV*)sv_2mortal((SV*)newAV());
+    av_x = (AV*)sv_2mortal((SV*)newAV());
     for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
-    AV* av_g = (AV*)sv_2mortal((SV*)newAV());
+    av_g = (AV*)sv_2mortal((SV*)newAV());
     for (i = 0; i < n; i++) av_store(av_g, i, newSVnv(g[i]));
     /* allocate space for arguments and return values */
-    SV** args = (SV**)malloc(9 * sizeof(SV*));
-    SV** rets = (SV**)malloc(1 * sizeof(SV*));
-    /* call the user progress monitor sub */
+    args = (SV**)malloc(9 * sizeof(SV*));
+    rets = (SV**)malloc(1 * sizeof(SV*));
+    /* call the user progress callback */
     args[0] = sv_2mortal(newRV_inc((SV*)av_x));
     args[1] = sv_2mortal(newRV_inc((SV*)av_g));
     args[2] = sv_2mortal(newSVnv(fx));
@@ -119,7 +126,7 @@ int lbfgs_progress(
     args[8] = user_data;
     call_perl_sub(lbfgs_prgr, args, rets, 9, 1);
     /* get status from return value */
-    int r = SvIV(rets[0]);
+    r = SvIV(rets[0]);
     /* release space of arguments and return values */
     SvREFCNT_dec(rets[0]);
     free(args);
@@ -137,8 +144,9 @@ create_lbfgs_instance(lbfgs_eval, lbfgs_prgr, user_data)
         SV*     lbfgs_eval
 	SV*     lbfgs_prgr
 	SV*	user_data
-    CODE:
+    PREINIT:
         void* instance = malloc(3 * sizeof(SV*));
+    CODE:
         ((SV**)instance)[0] = lbfgs_eval; /* ref to Perl eval callback */
 	((SV**)instance)[1] = lbfgs_prgr; /* ref to Perl monitor callback */
 	((SV**)instance)[2] = user_data;  /* ref to Perl user data */
@@ -155,8 +163,9 @@ destroy_lbfgs_instance(li)
 
 void*
 create_lbfgs_param()
-    CODE:
+    PREINIT:
         void* lp = malloc(sizeof(lbfgs_parameter_t));
+    CODE:
         lbfgs_parameter_init((lbfgs_parameter_t*)lp);
 	RETVAL = lp;
     OUTPUT:
@@ -173,9 +182,10 @@ set_lbfgs_param(lp, name, val)
         void*   lp
 	char*   name
 	SV*     val
-    CODE:
+    PREINIT:
         lbfgs_parameter_t* p = (lbfgs_parameter_t*)lp;
 	SV* r = &PL_sv_undef;
+    CODE:
         if (strcmp(name, "m") == 0) {
 	    if (SvIOK(val)) p->m = SvIV(val);
 	    r = newSViv(p->m);
@@ -225,19 +235,20 @@ do_lbfgs(param, instance, x0)
         void*   param
 	void*   instance
 	SV*     x0
-    CODE:
-	/* build C array carr_x0 from Perl array ref x0 */
+    PREINIT:
         AV* av_x0 = (AV*)SvRV(x0);
 	int n = av_len(av_x0) + 1;
+	int i, s;
+    CODE:
+	/* build C array carr_x0 from Perl array ref x0 */
 	lbfgsfloatval_t* carr_x0 = (lbfgsfloatval_t*)
 	    malloc(n * sizeof(lbfgsfloatval_t));
-	int i;
 	for (i = 0; i < n; i++) carr_x0[i] = SvNV(*av_fetch(av_x0, i, 0));
 	/* call L-BFGS */
-	int s = lbfgs(n, carr_x0, NULL, 
-	              SvOK(((SV**)instance)[0]) ? &lbfgs_evaluate : NULL,
-	              SvOK(((SV**)instance)[1]) ? &lbfgs_progress : NULL,
-	              instance, (lbfgs_parameter_t*)param);
+	s = lbfgs(n, carr_x0, NULL, 
+                  SvOK(((SV**)instance)[0]) ? &lbfgs_evaluation_cb : NULL,
+                  SvOK(((SV**)instance)[1]) ? &lbfgs_progress_cb : NULL,
+                  instance, (lbfgs_parameter_t*)param);
         /* store the result back to the Perl array ref x0 */
 	for (i = 0; i < n; i++) av_store(av_x0, i, newSVnv(carr_x0[i]));
 	/* release the C array */

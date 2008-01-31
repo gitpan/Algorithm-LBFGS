@@ -1,12 +1,11 @@
 package Algorithm::LBFGS;
 
-use 5.008008;
 use strict;
 use warnings;
 
-our $VERSION = '0.11';
+use XSLoader;
 
-require XSLoader;
+our $VERSION = '0.12';
 XSLoader::load('Algorithm::LBFGS', $VERSION);
 
 # constructor
@@ -38,31 +37,8 @@ sub get_param {
     return set_lbfgs_param($self->{param}, $name, undef);
 }
 
-# do optimization
-sub fmin {
-    my $self = shift;
-    my ($lbfgs_eval, $x0, $lbfgs_prgr, $user_data) = @_;
-    if (defined($lbfgs_prgr)) {
-        $lbfgs_prgr = \&verbose_monitor if ($lbfgs_prgr eq 'verbose');
-        $lbfgs_prgr = \&logging_monitor if ($lbfgs_prgr eq 'logging');
-    }
-    my $instance =
-        create_lbfgs_instance($lbfgs_eval, $lbfgs_prgr, $user_data);
-    $self->{status} = status_2pv(do_lbfgs($self->{param}, $instance, $x0));
-    destroy_lbfgs_instance($instance);
-    return $x0;
-}
-
-# query status
-sub get_status {
-    my $self = shift;
-    return $self->{status};
-}
-
-sub status_ok { return get_status(@_) == 0; }
-
 # verbose monitor
-sub verbose_monitor {
+my $verbose_monitor = sub {
     my ($x, $g, $fx, $xnorm, $gnorm, $step, $k, $ls, $user_data) = @_;
     my $str_x = join(', ', map { sprintf("%.4g", $_) } @$x);
     my $str_g = join(', ', map { sprintf("%.4g", $_) } @$g);
@@ -83,19 +59,43 @@ $hr
 
 MSG
     return 0;
-}
+};
 
 # logging monitor
-sub logging_monitor {
+my $logging_monitor = sub {
     my ($x, $g, $fx, $xnorm, $gnorm, $step, $k, $ls, $user_data) = @_;
     push @$user_data, {
         x => $x, g => $g, fx => $fx, xnorm => $xnorm, gnorm => $gnorm,
 	step => $step, k => $k, ls => $ls, user_data => $user_data
     };    
     return 0;
+};
+
+# do optimization
+sub fmin {
+    my $self = shift;
+    my ($lbfgs_eval, $x0, $lbfgs_prgr, $user_data) = @_;
+    if (defined($lbfgs_prgr)) {
+        $lbfgs_prgr = $verbose_monitor if ($lbfgs_prgr eq 'verbose');
+        $lbfgs_prgr = $logging_monitor if ($lbfgs_prgr eq 'logging');
+    }
+    my $instance =
+        create_lbfgs_instance($lbfgs_eval, $lbfgs_prgr, $user_data);
+    $self->{status} = status_2pv(do_lbfgs($self->{param}, $instance, $x0));
+    destroy_lbfgs_instance($instance);
+    return $x0;
 }
 
+# query status
+sub get_status {
+    my $self = shift;
+    return $self->{status};
+}
+
+sub status_ok { return get_status(@_) == 0; }
+
 1;
+
 __END__
 
 =head1 NAME
@@ -168,7 +168,7 @@ Query the value of a parameter.
 Change the values of one or several parameters.
 
    my $o = Algorithm::LBFGS->new;
-   print $o->set_param(epsilon => 1e-6, m => 7);
+   $o->set_param(epsilon => 1e-6, m => 7);
 
 =head2 fmin
 
@@ -246,7 +246,7 @@ C<s> for L</"fmin"> to decide whether the optimization should continue or
 stop. C<fmin> continues to the next iteration when C<s=0>, otherwise, it
 terminates with status code L</"LBFGSERR_CANCELED">.
 
-The client program can also pass string value to L</"progress_cb">, which
+The client program can also pass string values to L</"progress_cb">, which
 means it want to use a predefined progress callback subroutine. There are
 two predefined progress callback subroutines, 'verbose' and 'logging'.
 'verbose' just prints out all information of each iteration, while 'logging'
@@ -286,7 +286,7 @@ Get the status of previous call of L</"fmin">.
   # print the status out
   print $o->get_status;
 
-The status code is a string, which could be one in the
+The status code is a string, which could be one of those in the
 L</"List of Status Codes">.
 
 =head2 status_ok
