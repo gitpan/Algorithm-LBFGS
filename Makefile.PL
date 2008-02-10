@@ -7,7 +7,12 @@ name            'Algorithm-LBFGS';
 all_from        'lib/Algorithm/LBFGS.pm';
 license         'MIT';
 
-use_test_base;
+include         'Test::Builder';
+include         'Test::Builder::Module';
+include         'Test::More';
+include         'Test::Number::Delta';
+include         'Test::Differences';
+include         'Text::Diff';
 
 auto_install;
 

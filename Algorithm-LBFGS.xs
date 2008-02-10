@@ -17,35 +17,6 @@
  * NON-EXPORTED SUBS
  **************************************************************************/
 
-/* Call a perl subroutine pointed by sub_ref in an ARRAY context,
- * the SVs returned in rets should be released manually */
-void call_perl_sub(
-    SV*                      sub_ref,
-    SV**                     args,
-    SV**                     rets,
-    int                      nargs,
-    int                      nrets)
-{
-    int i;
-    /* initialize */
-    dSP;
-    ENTER;
-    SAVETMPS;
-    /* push arguments into the Perl stack */
-    PUSHMARK(SP);
-    for (i = 0; i < nargs; i++) XPUSHs(args[i]);
-    PUTBACK;
-    /* call */
-    call_sv(sub_ref, G_ARRAY);
-    /* get return values from the Perl stack */
-    SPAGAIN;
-    for (i = nrets - 1; i >= 0; i--) rets[i] = newSVsv(POPs);
-    PUTBACK;
-    /* finalize */
-    FREETMPS;
-    LEAVE;
-}
-
 /* Evaluation callback for L-BFGS */
 lbfgsfloatval_t lbfgs_evaluation_cb(
     void*                    instance,
@@ -55,34 +26,38 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     const lbfgsfloatval_t    step)
 {
     int i;
-    SV *lbfgs_eval, *user_data;
-    SV **args, **rets;
-    AV *av_x;
+    SV *lbfgs_eval, *user_data, *sv_f;
+    AV *av_x, *av_g;
     lbfgsfloatval_t f;
     /* fetch refs to user evaluation callback and extra data */
     lbfgs_eval = ((SV**)instance)[0];
     user_data = ((SV**)instance)[2];
-    /* create an mortal AV av_x from the C array x */
-    av_x = (AV*)sv_2mortal((SV*)newAV());
+    /* create an AV av_x from the C array x */
+    av_x = newAV();
     av_extend(av_x, n - 1);
     for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
-    /* allocate space for arguments and return values */
-    args = (SV**)malloc(3 * sizeof(SV*));
-    rets = (SV**)malloc(2 * sizeof(SV*));
     /* call the user evaluation callback */
-    args[0] = sv_2mortal(newRV_inc((SV*)av_x));
-    args[1] = sv_2mortal(newSVnv(step));
-    args[2] = user_data;
-    call_perl_sub(lbfgs_eval, args, rets, 3, 2);
-    /* get the function value and gradient vector from return values */
+    dSP;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newRV_noinc((SV*)av_x)));
+    XPUSHs(sv_2mortal(newSVnv(step)));
+    XPUSHs(user_data);
+    PUTBACK;
+    call_sv(lbfgs_eval, G_ARRAY);
+    SPAGAIN;
+    av_g = (AV*)SvRV(POPs);
+    sv_f = POPs;
+    f = SvNV(sv_f);
     for (i = 0; i < n; i++)
-        g[i] = SvNV(*av_fetch((AV*)SvRV(rets[1]), i, 0));
-    f = SvNV(rets[0]);
-    /* release space of arguments and return values */
-    SvREFCNT_dec(rets[0]);
-    SvREFCNT_dec(rets[1]);
-    free(args);
-    free(rets);
+        g[i] = SvNV(*av_fetch(av_g, i, 0));
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    /* clean up (for non-mortal return values) */
+    if (SvREFCNT(av_g) > 0) av_undef(av_g);
+    if (SvREFCNT(sv_f) > 0) SvREFCNT_dec(sv_f);
     return f;
 }
 
@@ -100,37 +75,40 @@ int lbfgs_progress_cb(
     int                      ls)
 {
     int i, r;
-    SV *lbfgs_prgr, *user_data;
-    SV **args, **rets;
+    SV *lbfgs_prgr, *user_data, *sv_r;
     AV *av_x, *av_g;
     /* fetch refs to the user progress callback and extra data */
     lbfgs_prgr = ((SV**)instance)[1];
     user_data = ((SV**)instance)[2];
-    /* create mortal AVs for C array x and g */
-    av_x = (AV*)sv_2mortal((SV*)newAV());
+    /* create AVs for C array x and g */
+    av_x = newAV();
     for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
-    av_g = (AV*)sv_2mortal((SV*)newAV());
+    av_g = newAV();
     for (i = 0; i < n; i++) av_store(av_g, i, newSVnv(g[i]));
-    /* allocate space for arguments and return values */
-    args = (SV**)malloc(9 * sizeof(SV*));
-    rets = (SV**)malloc(1 * sizeof(SV*));
     /* call the user progress callback */
-    args[0] = sv_2mortal(newRV_inc((SV*)av_x));
-    args[1] = sv_2mortal(newRV_inc((SV*)av_g));
-    args[2] = sv_2mortal(newSVnv(fx));
-    args[3] = sv_2mortal(newSVnv(xnorm));
-    args[4] = sv_2mortal(newSVnv(gnorm));
-    args[5] = sv_2mortal(newSVnv(step));
-    args[6] = sv_2mortal(newSViv(k));
-    args[7] = sv_2mortal(newSViv(ls));
-    args[8] = user_data;
-    call_perl_sub(lbfgs_prgr, args, rets, 9, 1);
-    /* get status from return value */
-    r = SvIV(rets[0]);
-    /* release space of arguments and return values */
-    SvREFCNT_dec(rets[0]);
-    free(args);
-    free(rets);
+    dSP;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(sv_2mortal(newRV_noinc((SV*)av_x)));
+    XPUSHs(sv_2mortal(newRV_noinc((SV*)av_g)));
+    XPUSHs(sv_2mortal(newSVnv(fx)));
+    XPUSHs(sv_2mortal(newSVnv(xnorm)));
+    XPUSHs(sv_2mortal(newSVnv(gnorm)));
+    XPUSHs(sv_2mortal(newSVnv(step)));
+    XPUSHs(sv_2mortal(newSViv(k)));
+    XPUSHs(sv_2mortal(newSViv(ls)));
+    XPUSHs(user_data);
+    PUTBACK;
+    call_sv(lbfgs_prgr, G_ARRAY);
+    SPAGAIN;
+    sv_r = POPs;
+    r = SvIV(sv_r);
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    /* clean up (for non-mortal return values) */
+    if (SvREFCNT(sv_r) > 0) SvREFCNT_dec(sv_r);
     return r;
 }
 

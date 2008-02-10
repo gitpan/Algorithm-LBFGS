@@ -1,5 +1,9 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.13  Sun Feb 10 20:47:00 2008
+	- Fixed a fatal bug that may cause serious memory leak
+	- Rewrote the tests by Test::Number::Delta and Test::Differences
+
 0.12  Thu Jan 31 18:29:00 2008
 	- Compatibility with some non-C99 compilers
 		- Much thanks to Taro Nishino, now the module can be built

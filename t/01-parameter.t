@@ -1,59 +1,77 @@
 use strict;
 use warnings;
 
-use t::LBFGS;
+use Test::More tests => 6;
+use Test::Number::Delta within => 1e-5;
+use Test::Differences;
 
-plan tests => 1 * blocks;
+my $__;
+sub NAME { $__ = shift };
 
-t::LBFGS::run_tests;
+###
+NAME 'Load the module';
+use_ok 'Algorithm::LBFGS',
+$__;
 
-__END__
+###
+NAME 'Create a L-BFGS optimizer';
+my $o = Algorithm::LBFGS->new;
+ok $o,
+$__;
 
-=== Create a L-BFGS optimizer
---- snippet
-$tmp{o} = Algorithm::LBFGS->new;
-defined($tmp{o})
---- expected
-1
-
-=== Default parameters (float)
---- snippet
-$tmp{o} = Algorithm::LBFGS->new;
+###
+NAME 'Default parameters - 1';
+delta_ok
 [
-    $tmp{o}->get_param('epsilon'),
-    $tmp{o}->get_param('min_step'),
-    $tmp{o}->get_param('max_step'),
-    $tmp{o}->get_param('ftol'),
-    $tmp{o}->get_param('gtol'),
-    $tmp{o}->get_param('orthantwise_c')
-]
---- approx_expected
-[1e-5, 1e-20, 1e+20, 1e-4, 0.9, 0.0]
-
-=== Default parameters (int)
---- snippet
+    $o->get_param('epsilon'),
+    $o->get_param('min_step'),
+    $o->get_param('max_step'),
+    $o->get_param('ftol'),
+    $o->get_param('gtol'),
+    $o->get_param('orthantwise_c')
+],
 [
-    $tmp{o}->get_param('m'),
-    $tmp{o}->get_param('max_iterations'),
-    $tmp{o}->get_param('max_linesearch')
-]
---- expected
-[6, 0, 20]
+    1e-5,
+    1e-20,
+    1e+20,
+    1e-4,
+    0.9,
+    0.0
+],
+$__;
 
-=== Create a L-BFGS optimizer by customized parameters
---- snippet
-$tmp{o} = Algorithm::LBFGS->new(gtol => 1.0, epsilon => 1e-6);
+###
+NAME 'Default parameters - 2';
+eq_or_diff
 [
-    $tmp{o}->get_param('gtol'),
-    $tmp{o}->get_param('epsilon')
-]
---- approx_expected
-[1.0, 1e-6]
+    $o->get_param('m'),
+    $o->get_param('max_iterations'),
+    $o->get_param('max_linesearch')
+],
+[
+    6,
+    0,
+    20
+],
+$__;
 
-=== Modify a parameters
---- snippet
-$tmp{o}->set_param(m => 4);
-$tmp{o}->get_param('m')
---- expected
-4
+###
+NAME 'Create a L-BFGS optimizer by customized parameters';
+$o = Algorithm::LBFGS->new(gtol => 1.0, epsilon => 1e-6);
+delta_ok
+[
+    $o->get_param('gtol'),
+    $o->get_param('epsilon')
+],
+[
+    1.0,
+    1e-6
+],
+$__;
+
+###
+NAME 'Modify parameter';
+$o->set_param(m => 4);
+is $o->get_param('m'), 4,
+$__;
 

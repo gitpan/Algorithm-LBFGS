@@ -1,3 +1,4 @@
+Algorithm-LBFGS.xs
 arithmetic_ansi.h
 arithmetic_sse_double.h
 arithmetic_sse_float.h
@@ -10,16 +11,14 @@ inc/Module/Install/Include.pm
 inc/Module/Install/Makefile.pm
 inc/Module/Install/MakeMaker.pm
 inc/Module/Install/Metadata.pm
-inc/Module/Install/TestBase.pm
-inc/Spiffy.pm
-inc/Test/Base.pm
-inc/Test/Base/Filter.pm
 inc/Test/Builder.pm
 inc/Test/Builder/Module.pm
+inc/Test/Differences.pm
 inc/Test/More.pm
+inc/Test/Number/Delta.pm
+inc/Text/Diff.pm
 lbfgs.c
 lbfgs.h
-Algorithm-LBFGS.xs
 lib/Algorithm/LBFGS.pm
 LICENSE
 Makefile.PL
@@ -30,4 +29,4 @@ README
 t/01-parameter.t
 t/02-optimization.t
 t/03-progress.t
-t/LBFGS.pm
+t/98-pod.t

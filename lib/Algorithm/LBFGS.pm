@@ -5,7 +5,7 @@ use warnings;
 
 use XSLoader;
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 XSLoader::load('Algorithm::LBFGS', $VERSION);
 
 # constructor
@@ -50,8 +50,6 @@ my $verbose_monitor = sub {
 Iteration $k
 $hr  
   f(x)             $s $fx
-  x                $s ($str_x)
-  grad f(x)        $s ($str_g)
   || x ||          $s $xnorm
   || grad f(x) ||  $s $gnorm
   line search step $s $step

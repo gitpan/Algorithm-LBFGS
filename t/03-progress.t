@@ -1,66 +1,75 @@
 use strict;
 use warnings;
 
-use t::LBFGS;
+use Test::More tests => 5;
+use Test::Number::Delta within => 1e-5;
+use Test::Differences;
 
-plan tests => 1 * blocks;
+my $__;
+sub NAME { $__ = shift };
 
-t::LBFGS::run_tests;
+sub norm2(@) {
+    my $x = shift;
+    my $r = 0;
+    for (@$x) { $r += $_ ** 2 }
+    return sqrt($r);
+}
 
-__END__
-
-=== Preparation of the following tests
---- snippet
-$tmp{o} = Algorithm::LBFGS->new;
+###
+NAME 'Preparation of the following tests';
+use Algorithm::LBFGS;
+my $o = Algorithm::LBFGS->new;
 my $lbfgs_eval = sub {
     my $x = shift;
-    my $f = $x->[0] * $x->[0] / 2 + $x->[1] * $x->[1] / 3;
+    my $f = $x->[0] ** 2 / 2 + $x->[1] ** 2 / 3;
     my $g = [$x->[0], 2 * $x->[1] / 3];
     return ($f, $g);
 };
-$tmp{log} = [];
-my $x = $tmp{o}->fmin($lbfgs_eval, [5, 5], 'logging', $tmp{log});
-1;
---- expected
-1;
+my $log = [];
+my $x = $o->fmin($lbfgs_eval, [5, 5], 'logging', $log);
+ok 1,
+$__;
 
-=== Iteration number k should be growing natural numbers
---- snippet
-my @k = map { $_->{k} } @{$tmp{log}};
-\@k;
---- expected
-[1..scalar(@{$tmp{log}})];
+###
+NAME 'Iteration number k should be growing natural numbers';
+{
+    my @k = map { $_->{k} } @$log;
+    eq_or_diff \@k, [1..scalar(@$log)],
+    $__;
+}
 
-=== Check the consistency of x and xnorm
---- snippet
-my @xnorm = map { norm2($_->{x}) } @{$tmp{log}};
-\@xnorm;
---- approx_expected
-my @expected_xnorm = map { $_->{xnorm} } @{$tmp{log}};
-\@expected_xnorm;
+###
+NAME 'Check the consistency of x and xnorm';
+{
+    my @xnorm = map { norm2($_->{x}) } @$log;
+    my @expected_xnorm = map { $_->{xnorm} } @$log;
+    eq_or_diff \@xnorm, \@expected_xnorm,
+    $__;
+}
 
-=== Check the consistency of g (grad f(x)) and gnorm
---- snippet
-my @gnorm = map { norm2($_->{g}) } @{$tmp{log}};
-\@gnorm;
---- approx_expected
-my @expected_gnorm = map { $_->{gnorm} } @{$tmp{log}};
-\@expected_gnorm;
+###
+NAME 'Check the consistency of g (grad f(x)) and gnorm';
+{
+    my @gnorm = map { norm2($_->{g}) } @$log;
+    my @expected_gnorm = map { $_->{gnorm} } @$log;
+    eq_or_diff \@gnorm, \@expected_gnorm,
+    $__;
+}
 
-=== f(x) should be decreasing
---- snippet
-my $d = [];
-my $log = $tmp{log};
-if (scalar(@$log) > 1) {
-    for (my $i = 1; $i < scalar(@$log); $i++) {
-        $d->[$i - 1] = $log->[$i]->{fx} < $log->[$i - 1] ? 1 : 0;
+###
+NAME 'f(x) should be decreasing';
+{
+    my $d = [];
+    if (scalar(@$log) > 1) {
+        for (my $i = 1; $i < scalar(@$log); $i++) {
+            $d->[$i - 1] = $log->[$i]->{fx} < $log->[$i - 1] ? 1 : 0;
+        }
     }
+    my $d_expected = [];
+    if (scalar(@$log) > 1) {
+        push @$d_expected, 1 for (1..scalar(@$log)-1);
+    }
+    eq_or_diff $d, $d_expected,
+    $__;
 }
-$d;
---- expected
-my $d = [];
-my $log = $tmp{log};
-if (scalar(@$log) > 1) {
-    push @$d, 1 for (1..scalar(@$log)-1);
-}
-$d;
+
