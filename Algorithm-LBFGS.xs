@@ -29,6 +29,7 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     SV *lbfgs_eval, *user_data, *sv_f;
     AV *av_x, *av_g;
     lbfgsfloatval_t f;
+    dSP;
     /* fetch refs to user evaluation callback and extra data */
     lbfgs_eval = ((SV**)instance)[0];
     user_data = ((SV**)instance)[2];
@@ -37,7 +38,6 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     av_extend(av_x, n - 1);
     for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
     /* call the user evaluation callback */
-    dSP;
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
@@ -77,6 +77,7 @@ int lbfgs_progress_cb(
     int i, r;
     SV *lbfgs_prgr, *user_data, *sv_r;
     AV *av_x, *av_g;
+    dSP;
     /* fetch refs to the user progress callback and extra data */
     lbfgs_prgr = ((SV**)instance)[1];
     user_data = ((SV**)instance)[2];
@@ -86,7 +87,6 @@ int lbfgs_progress_cb(
     av_g = newAV();
     for (i = 0; i < n; i++) av_store(av_g, i, newSVnv(g[i]));
     /* call the user progress callback */
-    dSP;
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);

@@ -1,5 +1,11 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.14  Tue Feb 12 16:31:00 2008
+	- Move 'dSP' to the start of each block containing it, making it
+	  compatible with non-C99 compilers, much thanks to Taro Nishino
+	  again
+	- Include Algorithm::Diff for testing
+
 0.13  Sun Feb 10 20:47:00 2008
 	- Fixed a fatal bug that may cause serious memory leak
 	- Rewrote the tests by Test::Number::Delta and Test::Differences

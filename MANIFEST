@@ -3,6 +3,7 @@ arithmetic_ansi.h
 arithmetic_sse_double.h
 arithmetic_sse_float.h
 Changes
+inc/Algorithm/Diff.pm
 inc/Module/AutoInstall.pm
 inc/Module/Install.pm
 inc/Module/Install/AutoInstall.pm

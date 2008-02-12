@@ -13,6 +13,7 @@ include         'Test::More';
 include         'Test::Number::Delta';
 include         'Test::Differences';
 include         'Text::Diff';
+include         'Algorithm::Diff';
 
 auto_install;
 
