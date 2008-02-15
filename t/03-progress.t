@@ -34,7 +34,7 @@ $__;
 NAME 'Iteration number k should be growing natural numbers';
 {
     my @k = map { $_->{k} } @$log;
-    eq_or_diff \@k, [1..scalar(@$log)],
+    is_deeply \@k, [1..scalar(@$log)],
     $__;
 }
 
@@ -43,7 +43,7 @@ NAME 'Check the consistency of x and xnorm';
 {
     my @xnorm = map { norm2($_->{x}) } @$log;
     my @expected_xnorm = map { $_->{xnorm} } @$log;
-    eq_or_diff \@xnorm, \@expected_xnorm,
+    is_deeply \@xnorm, \@expected_xnorm,
     $__;
 }
 
@@ -52,7 +52,7 @@ NAME 'Check the consistency of g (grad f(x)) and gnorm';
 {
     my @gnorm = map { norm2($_->{g}) } @$log;
     my @expected_gnorm = map { $_->{gnorm} } @$log;
-    eq_or_diff \@gnorm, \@expected_gnorm,
+    is_deeply \@gnorm, \@expected_gnorm,
     $__;
 }
 
@@ -69,7 +69,7 @@ NAME 'f(x) should be decreasing';
     if (scalar(@$log) > 1) {
         push @$d_expected, 1 for (1..scalar(@$log)-1);
     }
-    eq_or_diff $d, $d_expected,
+    is_deeply $d, $d_expected,
     $__;
 }
 

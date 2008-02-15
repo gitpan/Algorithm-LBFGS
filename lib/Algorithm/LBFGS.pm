@@ -5,7 +5,7 @@ use warnings;
 
 use XSLoader;
 
-our $VERSION = '0.14';
+our $VERSION = '0.15';
 XSLoader::load('Algorithm::LBFGS', $VERSION);
 
 # constructor
@@ -40,8 +40,6 @@ sub get_param {
 # verbose monitor
 my $verbose_monitor = sub {
     my ($x, $g, $fx, $xnorm, $gnorm, $step, $k, $ls, $user_data) = @_;
-    my $str_x = join(', ', map { sprintf("%g", $_) } @$x);
-    my $str_g = join(', ', map { sprintf("%g", $_) } @$g);
     ($fx, $xnorm, $gnorm, $step) = 
         map { sprintf("%g", $_) } ($fx, $xnorm, $gnorm, $step);
     my $hr = "=" x 79;

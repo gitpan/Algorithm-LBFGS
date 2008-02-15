@@ -11,9 +11,6 @@ include         'Test::Builder';
 include         'Test::Builder::Module';
 include         'Test::More';
 include         'Test::Number::Delta';
-include         'Test::Differences';
-include         'Text::Diff';
-include         'Algorithm::Diff';
 
 auto_install;
 

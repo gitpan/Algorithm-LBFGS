@@ -42,7 +42,7 @@ $__;
 
 ###
 NAME 'Default parameters - 2';
-eq_or_diff
+is_deeply
 [
     $o->get_param('m'),
     $o->get_param('max_iterations'),

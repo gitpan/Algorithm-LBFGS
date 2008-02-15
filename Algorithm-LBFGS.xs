@@ -11,6 +11,31 @@
 
 #include "lbfgs.h"
 
+/* Macros for debugging */
+
+/* uncomment the line below to enable tracing and timing */
+/* #define __ENABLE_TRACING__ */
+
+#ifdef __ENABLE_TRACING__
+
+#include "time.h"
+
+#define TRACE(msg) \
+    printf(msg); \
+    printf(": %0.10f s\n", 1.0 * (clock() - _c) / CLOCKS_PER_SEC); \
+    fflush(stdout); \
+    _c = clock()
+#define dTRACE clock_t _c = clock()
+
+#else
+
+#define TRACE(msg)
+#define dTRACE
+
+#endif
+
+/* Other macros */
+
 #define newSVpv_(x) newSVpv(x, strlen(x))
 
 /**************************************************************************
@@ -30,7 +55,9 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     AV *av_x, *av_g;
     lbfgsfloatval_t f;
     dSP;
+    dTRACE;
     /* fetch refs to user evaluation callback and extra data */
+    TRACE("lbfgs_evaluation_cb: enter");
     lbfgs_eval = ((SV**)instance)[0];
     user_data = ((SV**)instance)[2];
     /* create an AV av_x from the C array x */
@@ -45,7 +72,9 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     XPUSHs(sv_2mortal(newSVnv(step)));
     XPUSHs(user_data);
     PUTBACK;
+    TRACE("lbfgs_evaluation_cb: finish arguments preparation");
     call_sv(lbfgs_eval, G_ARRAY);
+    TRACE("lbfgs_evaluation_cb: finish calling");
     SPAGAIN;
     av_g = (AV*)SvRV(POPs);
     sv_f = POPs;
@@ -58,6 +87,7 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     /* clean up (for non-mortal return values) */
     if (SvREFCNT(av_g) > 0) av_undef(av_g);
     if (SvREFCNT(sv_f) > 0) SvREFCNT_dec(sv_f);
+    TRACE("lbfgs_evaluation_cb: leave");
     return f;
 }
 
@@ -78,7 +108,9 @@ int lbfgs_progress_cb(
     SV *lbfgs_prgr, *user_data, *sv_r;
     AV *av_x, *av_g;
     dSP;
+    dTRACE;
     /* fetch refs to the user progress callback and extra data */
+    TRACE("lbfgs_progress_cb: enter");
     lbfgs_prgr = ((SV**)instance)[1];
     user_data = ((SV**)instance)[2];
     /* create AVs for C array x and g */
@@ -100,7 +132,9 @@ int lbfgs_progress_cb(
     XPUSHs(sv_2mortal(newSViv(ls)));
     XPUSHs(user_data);
     PUTBACK;
+    TRACE("lbfgs_progress_cb: finish arguments preparation");
     call_sv(lbfgs_prgr, G_ARRAY);
+    TRACE("lbfgs_progress_cb: finish calling");
     SPAGAIN;
     sv_r = POPs;
     r = SvIV(sv_r);
@@ -109,6 +143,7 @@ int lbfgs_progress_cb(
     LEAVE;
     /* clean up (for non-mortal return values) */
     if (SvREFCNT(sv_r) > 0) SvREFCNT_dec(sv_r);
+    TRACE("lbfgs_progress_cb: leave");
     return r;
 }
 

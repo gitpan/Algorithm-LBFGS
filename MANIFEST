@@ -3,7 +3,6 @@ arithmetic_ansi.h
 arithmetic_sse_double.h
 arithmetic_sse_float.h
 Changes
-inc/Algorithm/Diff.pm
 inc/Module/AutoInstall.pm
 inc/Module/Install.pm
 inc/Module/Install/AutoInstall.pm
@@ -14,10 +13,8 @@ inc/Module/Install/MakeMaker.pm
 inc/Module/Install/Metadata.pm
 inc/Test/Builder.pm
 inc/Test/Builder/Module.pm
-inc/Test/Differences.pm
 inc/Test/More.pm
 inc/Test/Number/Delta.pm
-inc/Text/Diff.pm
 lbfgs.c
 lbfgs.h
 lib/Algorithm/LBFGS.pm
