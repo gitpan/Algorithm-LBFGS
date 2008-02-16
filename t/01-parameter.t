@@ -3,7 +3,6 @@ use warnings;
 
 use Test::More tests => 6;
 use Test::Number::Delta within => 1e-5;
-use Test::Differences;
 
 my $__;
 sub NAME { $__ = shift };

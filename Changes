@@ -1,5 +1,8 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.16  Sat Feb 16 12:43:00 2008
+	- Tiny fix on the test
+
 0.15  Fri Feb 15 22:09:00 2008
 	- Fixed a bug in the 'verbose' progress callback
 	- Add some macros for debugging and timing in Algorithm-LBFGS.xs
