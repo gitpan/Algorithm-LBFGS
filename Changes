@@ -1,5 +1,9 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.17  Tue Mar 11 15:17:00 2008
+	- External C callback is supported
+	- Rewrite build-in verbose and logging callback by C
+
 0.16  Sat Feb 16 12:43:00 2008
 	- Tiny fix on the test
 

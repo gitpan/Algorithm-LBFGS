@@ -5,7 +5,7 @@ use warnings;
 
 use XSLoader;
 
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 XSLoader::load('Algorithm::LBFGS', $VERSION);
 
 # constructor
@@ -37,43 +37,13 @@ sub get_param {
     return set_lbfgs_param($self->{param}, $name, undef);
 }
 
-# verbose monitor
-my $verbose_monitor = sub {
-    my ($x, $g, $fx, $xnorm, $gnorm, $step, $k, $ls, $user_data) = @_;
-    ($fx, $xnorm, $gnorm, $step) = 
-        map { sprintf("%g", $_) } ($fx, $xnorm, $gnorm, $step);
-    my $hr = "=" x 79;
-    my $s = ":";
-    print <<MSG;
-Iteration $k
-$hr  
-  f(x)             $s $fx
-  || x ||          $s $xnorm
-  || grad f(x) ||  $s $gnorm
-  line search step $s $step
-  evaluations num  $s $ls
-
-MSG
-    return 0;
-};
-
-# logging monitor
-my $logging_monitor = sub {
-    my ($x, $g, $fx, $xnorm, $gnorm, $step, $k, $ls, $user_data) = @_;
-    push @$user_data, {
-        x => $x, g => $g, fx => $fx, xnorm => $xnorm, gnorm => $gnorm,
-	step => $step, k => $k, ls => $ls, user_data => $user_data
-    };    
-    return 0;
-};
-
 # do optimization
 sub fmin {
     my $self = shift;
     my ($lbfgs_eval, $x0, $lbfgs_prgr, $user_data) = @_;
     if (defined($lbfgs_prgr)) {
-        $lbfgs_prgr = $verbose_monitor if ($lbfgs_prgr eq 'verbose');
-        $lbfgs_prgr = $logging_monitor if ($lbfgs_prgr eq 'logging');
+        $lbfgs_prgr = verbose_prgr_cb_ptr() if ($lbfgs_prgr eq 'verbose');
+        $lbfgs_prgr = logging_prgr_cb_ptr() if ($lbfgs_prgr eq 'logging');
     }
     my $instance =
         create_lbfgs_instance($lbfgs_eval, $lbfgs_prgr, $user_data);
@@ -174,9 +144,9 @@ The prototype of L</"fmin"> is like
   
 As the name says, it finds a vector x which minimize the function f(x). 
 
-L</"evaluation_cb"> is a ref to the evaluation callback subroutine, 
-L</"x0"> is the initial point of the optimization algorithm,
-L</"progress_cb"> (optional) is a ref to the progress callback subroutine,
+L</"evaluation_cb"> specifies the evaluation callback subroutine, 
+L</"x0"> is the initial point,
+L</"progress_cb"> (optional) specifies the progress callback subroutine,
 and L</"user_data"> (optional) is a piece of extra data that client program
 want to pass to both L</"evaluation_cb"> and L</"progress_cb">.
 
@@ -188,47 +158,71 @@ the returning C<x> is undefined.
 
 =head3 evaluation_cb
 
-The ref to the evaluation callback subroutine. 
+Specifies the evaluation callback subroutine. 
 
 The evaluation callback subroutine is supposed to calculate the function
 value and gradient vector at a specified point C<x>. It is called
 automatically by L</"fmin"> when an evaluation is needed.
 
-The client program need to make sure their evaluation callback subroutine
-has a prototype like
+The value of L</"evaluation_cb"> can be either a sub ref or an integer.
 
-  (f, g) = evaluation_cb(x, step, user_data)
+When L</"evaluation_cb"> is a sub ref, the client program need to make 
+sure it points to a Perl subrountine that has a prototype like
+
+  (f, g) = pl_eval_cb(x, step, user_data)
 
 C<x> (array ref) is the current values of variables, C<step> is the
 current step of the line search routine, L</"user_data"> is the extra user 
 data specified when calling L</"fmin">. 
 
-The evaluation callback subroutine is supposed to return both the function
+The subroutine is supposed to return both the function
 value C<f> and the gradient vector C<g> (array ref) at current C<x>.
+
+When L</"evaluation_cb"> is an integer, it is interpreted as the
+address of an external C evaluation callback, 
+which should has a prototype like
+
+  double c_eval_cb(
+      void*               user_data,
+      const double*       x,
+      double*             g,
+      int                 n,
+      double              step
+  )
+
+The meanings of arguments are mostly as same as they are in the Perl 
+callback. However, as C arrays do not indicate their lengths,
+C<n> stores the length of both C<x> and C<g>.
+
+The C callback is supposed to return the function value by its 
+returning value and gradient vector by C<g>.
 
 =head3 x0
 
 The initial point of the optimization algorithm.
 The final result may depend on your choice of C<x0>.
 
-NOTE: The content of C<x0> will be modified after calling L</"fmin">.
+NOTE: The content of C<x0> could be modified after calling L</"fmin">.
 When the algorithm terminates successfully, the content of C<x0> will be 
 replaced by the optimized variables, otherwise, the content of C<x0> is
 undefined.
 
-
 =head3 progress_cb
 
-The ref to the progress callback subroutine.
+Specifies the progress callback subroutine.
 
 The progress callback subroutine is called by L</"fmin"> at the end of each
-iteration, with information of current iteration. It is very useful for a
-client program to monitor the optimization progress. 
+iteration, with information of current iteration. It is very useful for the
+those who want to monitor the optimization progress. 
 
-The client program need to make sure their progress callback subroutine
+The value of L</"progress_cb"> can be either a sub ref, an integer or a
+string.
+
+When L</"progress_cb"> is a sub ref,
+the client program need to make sure it points to a Perl subroutine which
 has a prototype like
 
-  s = progress_cb(x, g, fx, xnorm, gnorm, step, k, ls, user_data)
+  s = pl_prgr_cb(x, g, fx, xnorm, gnorm, step, k, ls, user_data)
 
 C<x> (array ref) is the current values of variables. C<g> (array ref) is the
 current gradient vector. C<fx> is the current function value. C<xnorm>
@@ -237,16 +231,40 @@ step used for this iteration. C<k> is the iteration count. C<ls> is the
 number of evaluations in this iteration. L</"user_data"> is the extra
 user data specified when calling L</"fmin">. 
 
-The progress callback subroutine is supposed to return an indicating value
+The subroutine is supposed to return an indicating value
 C<s> for L</"fmin"> to decide whether the optimization should continue or
 stop. C<fmin> continues to the next iteration when C<s=0>, otherwise, it
 terminates with status code L</"LBFGSERR_CANCELED">.
 
-The client program can also pass string values to L</"progress_cb">, which
-means it want to use a predefined progress callback subroutine. There are
-two predefined progress callback subroutines, 'verbose' and 'logging'.
-'verbose' just prints out all information of each iteration, while 'logging'
-logs the same information in an array ref provided by L</"user_data">.
+When L</"progress_cb"> is an integer,
+it is interpreted as the address of an external C progress callback which
+has a prototype like
+
+  int c_prgr_cb(
+      void*           user_data,
+      const double*   x,
+      const double*   g,
+      const double    fx,
+      const double    xnorm,
+      const double    gnorm,
+      const double    step,
+      int             n,
+      int             k,
+      int             ls
+  )
+
+The meanings of arguments are mostly as same as they are in the Perl 
+callback, while C<n> again stores the lengths of C<x> and C<g>.
+
+The C callback is supposed to return the same indicating value C<s>, too.
+
+When L</"progress_cb"> is a string,
+it chooses a predefined progress callback subroutine.
+There are two predefined progress callback subroutines,
+'verbose' and 'logging'.
+'verbose' just prints out some essential informations of each iteration,
+while 'logging' logs them in an array ref provided
+by L</"user_data">.
 
   ...
 
@@ -489,6 +507,39 @@ A logic error (negative line-search step) occurred.
 =head3 LBFGSERR_INCREASEGRADIENT
 
 The current search direction increases the objective function value. 
+
+=head2 An example of external C callbacks
+
+C callbacks if for those who care much about the performance.
+There are mainly 2 ways to define a C callback,
+one is by XS code, the other is by the module L<Inline::C>.
+
+Here we give an example implemented by L<Inline::C>.
+
+  use Inline 'C';
+  
+  my $o = Algorithm::LBFGS->new;
+  my $x1 = $o->fmin(f1_eval_ptr(), [6]);
+
+  # now $x1 should equal to [0]
+
+  __END__
+  __C__
+
+  /* f1(x) = x^2 */
+  double f1_eval(
+      void*          userdata,
+      const double*  x,
+      double*        g,
+      const int      n,
+      const double   step)
+  {
+      g[0] = 2 * x[0];
+      return x[0] * x[0];
+  }
+
+  void* f1_eval_ptr() { return &f1_eval; }
+
 
 =head1 SEE ALSO
 

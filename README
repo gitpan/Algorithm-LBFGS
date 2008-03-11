@@ -71,11 +71,11 @@ DESCRIPTION
   
     As the name says, it finds a vector x which minimize the function f(x).
 
-    "evaluation_cb" is a ref to the evaluation callback subroutine, "x0" is
-    the initial point of the optimization algorithm, "progress_cb"
-    (optional) is a ref to the progress callback subroutine, and "user_data"
-    (optional) is a piece of extra data that client program want to pass to
-    both "evaluation_cb" and "progress_cb".
+    "evaluation_cb" specifies the evaluation callback subroutine, "x0" is
+    the initial point, "progress_cb" (optional) specifies the progress
+    callback subroutine, and "user_data" (optional) is a piece of extra data
+    that client program want to pass to both "evaluation_cb" and
+    "progress_cb".
 
     Client program can use "get_status" to find if any problem occured
     during the optimization after their calling "fmin". When the status is
@@ -84,45 +84,67 @@ DESCRIPTION
     in the returning "x" is undefined.
 
    evaluation_cb
-    The ref to the evaluation callback subroutine.
+    Specifies the evaluation callback subroutine.
 
     The evaluation callback subroutine is supposed to calculate the function
     value and gradient vector at a specified point "x". It is called
     automatically by "fmin" when an evaluation is needed.
 
-    The client program need to make sure their evaluation callback
-    subroutine has a prototype like
+    The value of "evaluation_cb" can be either a sub ref or an integer.
 
-      (f, g) = evaluation_cb(x, step, user_data)
+    When "evaluation_cb" is a sub ref, the client program need to make sure
+    it points to a Perl subrountine that has a prototype like
+
+      (f, g) = pl_eval_cb(x, step, user_data)
 
     "x" (array ref) is the current values of variables, "step" is the
     current step of the line search routine, "user_data" is the extra user
     data specified when calling "fmin".
 
-    The evaluation callback subroutine is supposed to return both the
-    function value "f" and the gradient vector "g" (array ref) at current
-    "x".
+    The subroutine is supposed to return both the function value "f" and the
+    gradient vector "g" (array ref) at current "x".
+
+    When "evaluation_cb" is an integer, it is interpreted as the address of
+    an external C evaluation callback, which should has a prototype like
+
+      double c_eval_cb(
+          void*               user_data,
+          const double*       x,
+          double*             g,
+          int                 n,
+          double              step
+      )
+
+    The meanings of arguments are mostly as same as they are in the Perl
+    callback. However, as C arrays do not indicate their lengths, "n" stores
+    the length of both "x" and "g".
+
+    The C callback is supposed to return the function value by its returning
+    value and gradient vector by "g".
 
    x0
     The initial point of the optimization algorithm. The final result may
     depend on your choice of "x0".
 
-    NOTE: The content of "x0" will be modified after calling "fmin". When
+    NOTE: The content of "x0" could be modified after calling "fmin". When
     the algorithm terminates successfully, the content of "x0" will be
     replaced by the optimized variables, otherwise, the content of "x0" is
     undefined.
 
    progress_cb
-    The ref to the progress callback subroutine.
+    Specifies the progress callback subroutine.
 
     The progress callback subroutine is called by "fmin" at the end of each
     iteration, with information of current iteration. It is very useful for
-    a client program to monitor the optimization progress.
+    the those who want to monitor the optimization progress.
 
-    The client program need to make sure their progress callback subroutine
-    has a prototype like
+    The value of "progress_cb" can be either a sub ref, an integer or a
+    string.
 
-      s = progress_cb(x, g, fx, xnorm, gnorm, step, k, ls, user_data)
+    When "progress_cb" is a sub ref, the client program need to make sure it
+    points to a Perl subroutine which has a prototype like
+
+      s = pl_prgr_cb(x, g, fx, xnorm, gnorm, step, k, ls, user_data)
 
     "x" (array ref) is the current values of variables. "g" (array ref) is
     the current gradient vector. "fx" is the current function value. "xnorm"
@@ -131,17 +153,37 @@ DESCRIPTION
     number of evaluations in this iteration. "user_data" is the extra user
     data specified when calling "fmin".
 
-    The progress callback subroutine is supposed to return an indicating
-    value "s" for "fmin" to decide whether the optimization should continue
-    or stop. "fmin" continues to the next iteration when "s=0", otherwise,
-    it terminates with status code "LBFGSERR_CANCELED".
+    The subroutine is supposed to return an indicating value "s" for "fmin"
+    to decide whether the optimization should continue or stop. "fmin"
+    continues to the next iteration when "s=0", otherwise, it terminates
+    with status code "LBFGSERR_CANCELED".
 
-    The client program can also pass string values to "progress_cb", which
-    means it want to use a predefined progress callback subroutine. There
-    are two predefined progress callback subroutines, 'verbose' and
-    'logging'. 'verbose' just prints out all information of each iteration,
-    while 'logging' logs the same information in an array ref provided by
-    "user_data".
+    When "progress_cb" is an integer, it is interpreted as the address of an
+    external C progress callback which has a prototype like
+
+      int c_prgr_cb(
+          void*           user_data,
+          const double*   x,
+          const double*   g,
+          const double    fx,
+          const double    xnorm,
+          const double    gnorm,
+          const double    step,
+          int             n,
+          int             k,
+          int             ls
+      )
+
+    The meanings of arguments are mostly as same as they are in the Perl
+    callback, while "n" again stores the lengths of "x" and "g".
+
+    The C callback is supposed to return the same indicating value "s", too.
+
+    When "progress_cb" is a string, it chooses a predefined progress
+    callback subroutine. There are two predefined progress callback
+    subroutines, 'verbose' and 'logging'. 'verbose' just prints out some
+    essential informations of each iteration, while 'logging' logs them in
+    an array ref provided by "user_data".
 
       ...
 
@@ -347,6 +389,37 @@ DESCRIPTION
 
    LBFGSERR_INCREASEGRADIENT
     The current search direction increases the objective function value.
+
+  An example of external C callbacks
+    C callbacks if for those who care much about the performance. There are
+    mainly 2 ways to define a C callback, one is by XS code, the other is by
+    the module Inline::C.
+
+    Here we give an example implemented by Inline::C.
+
+      use Inline 'C';
+  
+      my $o = Algorithm::LBFGS->new;
+      my $x1 = $o->fmin(f1_eval_ptr(), [6]);
+
+      # now $x1 should equal to [0]
+
+      __END__
+      __C__
+
+      /* f1(x) = x^2 */
+      double f1_eval(
+          void*          userdata,
+          const double*  x,
+          double*        g,
+          const int      n,
+          const double   step)
+      {
+          g[0] = 2 * x[0];
+          return x[0] * x[0];
+      }
+
+      void* f1_eval_ptr() { return &f1_eval; }
 
 SEE ALSO
     PDL, PDL::Opt::NonLinear

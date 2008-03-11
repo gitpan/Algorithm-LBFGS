@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 4;
+use Test::More tests => 5;
 use Test::Number::Delta within => 1e-5;
 
 my $__;
@@ -30,13 +30,18 @@ NAME 'A simple optimization (one dimension)';
 }
 
 ###
+NAME 'Test status';
+is $o->get_status, 'LBFGS_OK',
+$__;
+
+###
 NAME 'Another simple optimization (two dimensions)';
 # f(x1, x2) = x1^2 / 2 + x2^2 / 3
 {
     my $lbfgs_eval = sub {
         my $x = shift;
-        my $f = $x->[0] ** 2 / 2 + $x->[1] ** 2 / 3;
-        my $g = [$x->[0], 2 * $x->[1] / 3];
+        my $f = $x->[0] ** 2 / 2.0 + $x->[1] ** 2 / 3.0;
+        my $g = [$x->[0], 2 * $x->[1] / 3.0];
         return ($f, $g);
     };
     my $x1 = $o->fmin($lbfgs_eval, [5, 5]);
@@ -50,12 +55,11 @@ NAME 'A high dimension optimization (100,000 dimensions)';
 {
     my $dim = 100000;
     my $lbfgs_eval = sub {
-        my $i;
         my $x = shift;
         my $f = ($x->[0] - 2) ** 2 + ($x->[1] + 3) ** 2;
-        for ($i = 2; $i < $dim; $i++) { $f += $x->[$i] * $x->[$i] }
+        for my $i (2 .. $dim - 1) { $f += $x->[$i] * $x->[$i] }
         my $g = [ 2 * $x->[0] - 4, 2 * $x->[1] + 6 ];
-        for ($i = 2; $i < $dim; $i++) { $g->[$i] = 2 * $x->[$i] }
+        for my $i (2 .. $dim - 1) { $g->[$i] = 2 * $x->[$i] }
         return ($f, $g);
     };
     my $x0 = [];

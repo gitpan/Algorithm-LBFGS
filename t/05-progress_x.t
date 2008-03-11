@@ -42,7 +42,7 @@ NAME 'Check the consistency of x and xnorm';
 {
     my @xnorm = map { norm2($_->{x}) } @$log;
     my @expected_xnorm = map { $_->{xnorm} } @$log;
-    is_deeply \@xnorm, \@expected_xnorm,
+    delta_ok \@xnorm, \@expected_xnorm,
     $__;
 }
 
@@ -51,7 +51,7 @@ NAME 'Check the consistency of g (grad f(x)) and gnorm';
 {
     my @gnorm = map { norm2($_->{g}) } @$log;
     my @expected_gnorm = map { $_->{gnorm} } @$log;
-    is_deeply \@gnorm, \@expected_gnorm,
+    delta_ok \@gnorm, \@expected_gnorm,
     $__;
 }
 

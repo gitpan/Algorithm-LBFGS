@@ -26,5 +26,7 @@ ppport.h
 README
 t/01-parameter.t
 t/02-optimization.t
-t/03-progress.t
+t/03-optimization_x.t
+t/04-progress.t
+t/05-progress_x.t
 t/98-pod.t

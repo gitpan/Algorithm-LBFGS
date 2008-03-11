@@ -14,18 +14,17 @@
 /* Macros for debugging */
 
 /* uncomment the line below to enable tracing and timing */
-/* #define __ENABLE_TRACING__ */
+/*#define __ENABLE_TRACING__*/
 
 #ifdef __ENABLE_TRACING__
 
 #include "time.h"
 
 #define TRACE(msg) \
-    printf(msg); \
-    printf(": %0.10f s\n", 1.0 * (clock() - _c) / CLOCKS_PER_SEC); \
-    fflush(stdout); \
-    _c = clock()
-#define dTRACE clock_t _c = clock()
+    printf(_fn); printf(": "); printf(msg); \
+    printf(": %0.10f s\n", 1.0 * (clock() - _t) / CLOCKS_PER_SEC); \
+    fflush(stdout); _t = clock()
+#define dTRACE(fn) clock_t _t = clock(); char* _fn = fn
 
 #else
 
@@ -37,13 +36,15 @@
 /* Other macros */
 
 #define newSVpv_(x) newSVpv(x, strlen(x))
+#define hv_store_(hv, key, value) \
+    hv_store(hv, key, strlen(key), value, 0)
 
 /**************************************************************************
  * NON-EXPORTED SUBS
  **************************************************************************/
 
-/* Evaluation callback for L-BFGS */
-lbfgsfloatval_t lbfgs_evaluation_cb(
+/* Evaluation callback for calling Perl callback */
+lbfgsfloatval_t pl_eval_cb(
     void*                    instance,
     const lbfgsfloatval_t*   x,
     lbfgsfloatval_t*         g,
@@ -55,9 +56,9 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     AV *av_x, *av_g;
     lbfgsfloatval_t f;
     dSP;
-    dTRACE;
+    dTRACE("pl_eval_cb");
     /* fetch refs to user evaluation callback and extra data */
-    TRACE("lbfgs_evaluation_cb: enter");
+    TRACE("enter");
     lbfgs_eval = ((SV**)instance)[0];
     user_data = ((SV**)instance)[2];
     /* create an AV av_x from the C array x */
@@ -72,9 +73,9 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     XPUSHs(sv_2mortal(newSVnv(step)));
     XPUSHs(user_data);
     PUTBACK;
-    TRACE("lbfgs_evaluation_cb: finish arguments preparation");
+    TRACE("finish arguments preparation");
     call_sv(lbfgs_eval, G_ARRAY);
-    TRACE("lbfgs_evaluation_cb: finish calling");
+    TRACE("finish calling");
     SPAGAIN;
     av_g = (AV*)SvRV(POPs);
     sv_f = POPs;
@@ -85,14 +86,14 @@ lbfgsfloatval_t lbfgs_evaluation_cb(
     FREETMPS;
     LEAVE;
     /* clean up (for non-mortal return values) */
-    if (SvREFCNT(av_g) > 0) av_undef(av_g);
-    if (SvREFCNT(sv_f) > 0) SvREFCNT_dec(sv_f);
-    TRACE("lbfgs_evaluation_cb: leave");
+    while (SvREFCNT(av_g) > 0) { av_undef(av_g); }
+    while (SvREFCNT(sv_f) > 0) { SvREFCNT_dec(sv_f); }
+    TRACE("leave");
     return f;
 }
 
-/* Progress callback for L-BFGS */
-int lbfgs_progress_cb(
+/* Progress callback for calling Perl callback */
+int pl_prgr_cb(
     void*                    instance,
     const lbfgsfloatval_t*   x,
     const lbfgsfloatval_t*   g,
@@ -108,9 +109,9 @@ int lbfgs_progress_cb(
     SV *lbfgs_prgr, *user_data, *sv_r;
     AV *av_x, *av_g;
     dSP;
-    dTRACE;
+    dTRACE("pl_prgr_cb");
     /* fetch refs to the user progress callback and extra data */
-    TRACE("lbfgs_progress_cb: enter");
+    TRACE("enter");
     lbfgs_prgr = ((SV**)instance)[1];
     user_data = ((SV**)instance)[2];
     /* create AVs for C array x and g */
@@ -132,9 +133,9 @@ int lbfgs_progress_cb(
     XPUSHs(sv_2mortal(newSViv(ls)));
     XPUSHs(user_data);
     PUTBACK;
-    TRACE("lbfgs_progress_cb: finish arguments preparation");
+    TRACE("finish arguments preparation");
     call_sv(lbfgs_prgr, G_ARRAY);
-    TRACE("lbfgs_progress_cb: finish calling");
+    TRACE("finish calling");
     SPAGAIN;
     sv_r = POPs;
     r = SvIV(sv_r);
@@ -142,9 +143,59 @@ int lbfgs_progress_cb(
     FREETMPS;
     LEAVE;
     /* clean up (for non-mortal return values) */
-    if (SvREFCNT(sv_r) > 0) SvREFCNT_dec(sv_r);
-    TRACE("lbfgs_progress_cb: leave");
+    while (SvREFCNT(sv_r) > 0) { SvREFCNT_dec(sv_r); }
+    TRACE("leave");
     return r;
+}
+
+int logging_prgr_cb(
+    void*                    user_data,
+    const lbfgsfloatval_t*   x,
+    const lbfgsfloatval_t*   g,
+    const lbfgsfloatval_t    fx,
+    const lbfgsfloatval_t    xnorm,
+    const lbfgsfloatval_t    gnorm,
+    const lbfgsfloatval_t    step,
+    int                      n,
+    int                      k,
+    int                      ls)
+{
+    AV* log = (AV*)SvRV((SV*)user_data);
+    HV* item = newHV();
+    AV* av_x = newAV();
+    AV* av_g = newAV();
+    int i;
+    av_extend(av_x, n - 1);
+    av_extend(av_g, n - 1);
+    for (i = 0; i < n; i++) av_store(av_x, i, newSVnv(x[i]));
+    for (i = 0; i < n; i++) av_store(av_g, i, newSVnv(g[i]));
+    hv_store_(item, "x", newRV_noinc((SV*)av_x));
+    hv_store_(item, "g", newRV_noinc((SV*)av_g));
+    hv_store_(item, "fx", newSVnv(fx));
+    hv_store_(item, "xnorm", newSVnv(xnorm));
+    hv_store_(item, "gnorm", newSVnv(gnorm));
+    hv_store_(item, "step", newSVnv(step));
+    hv_store_(item, "n", newSViv(n));
+    hv_store_(item, "k", newSViv(k));
+    hv_store_(item, "ls", newSViv(ls));
+    av_push(log, newRV_noinc((SV*)item));
+    return 0;
+}
+
+int verbose_prgr_cb(
+    void*                    instance,
+    const lbfgsfloatval_t*   x,
+    const lbfgsfloatval_t*   g,
+    const lbfgsfloatval_t    fx,
+    const lbfgsfloatval_t    xnorm,
+    const lbfgsfloatval_t    gnorm,
+    const lbfgsfloatval_t    step,
+    int                      n,
+    int                      k,
+    int                      ls)
+{
+    printf("%d: fx = %g, xnorm = %g, gnorm = %g\n", k, fx, xnorm, gnorm);
+    return 0;
 }
 
 /**************************************************************************
@@ -160,9 +211,9 @@ create_lbfgs_instance(lbfgs_eval, lbfgs_prgr, user_data)
     PREINIT:
         void* instance = malloc(3 * sizeof(SV*));
     CODE:
-        ((SV**)instance)[0] = lbfgs_eval; /* ref to Perl eval callback */
-	((SV**)instance)[1] = lbfgs_prgr; /* ref to Perl monitor callback */
-	((SV**)instance)[2] = user_data;  /* ref to Perl user data */
+        ((SV**)instance)[0] = lbfgs_eval; /* ref to eval callback */
+	((SV**)instance)[1] = lbfgs_prgr; /* ref to monitor callback */
+	((SV**)instance)[2] = user_data;  /* ref to user data */
 	RETVAL = instance;
     OUTPUT:
         RETVAL
@@ -252,21 +303,55 @@ do_lbfgs(param, instance, x0)
         AV* av_x0 = (AV*)SvRV(x0);
 	int n = av_len(av_x0) + 1;
 	int i, s;
-    CODE:
-	/* build C array carr_x0 from Perl array ref x0 */
 	lbfgsfloatval_t* carr_x0 = (lbfgsfloatval_t*)
 	    malloc(n * sizeof(lbfgsfloatval_t));
+	SV* eval_cb = ((SV**)instance)[0];
+	SV* prgr_cb = ((SV**)instance)[1];
+	void *eval_cb_ptr, *prgr_cb_ptr;
+    CODE:
+	/* build C array carr_x0 from Perl array ref x0 */
 	for (i = 0; i < n; i++) carr_x0[i] = SvNV(*av_fetch(av_x0, i, 0));
+	/* fill eval_cb_ptr */
+	if (!SvOK(eval_cb))
+	    eval_cb_ptr = NULL;
+	else if (SvROK(eval_cb))
+	    eval_cb_ptr = &pl_eval_cb;
+	else if (SvIOK(eval_cb) && SvIV(eval_cb) != 0)
+	    eval_cb_ptr = INT2PTR(void*, SvIV(eval_cb));
+	else
+	    eval_cb_ptr = NULL;
+	/* fill prgr_cb_ptr */    
+	if (!SvOK(prgr_cb))
+	    prgr_cb_ptr = NULL;
+	else if (SvROK(prgr_cb))
+	    prgr_cb_ptr = &pl_prgr_cb;
+	else if (SvIOK(prgr_cb) && SvIV(prgr_cb) != 0)
+	    prgr_cb_ptr = INT2PTR(void*, SvIV(prgr_cb));
+	else
+	    prgr_cb_ptr = NULL;
 	/* call L-BFGS */
 	s = lbfgs(n, carr_x0, NULL, 
-                  SvOK(((SV**)instance)[0]) ? &lbfgs_evaluation_cb : NULL,
-                  SvOK(((SV**)instance)[1]) ? &lbfgs_progress_cb : NULL,
-                  instance, (lbfgs_parameter_t*)param);
+                  eval_cb_ptr, prgr_cb_ptr,
+		  instance, (lbfgs_parameter_t*)param);
         /* store the result back to the Perl array ref x0 */
 	for (i = 0; i < n; i++) av_store(av_x0, i, newSVnv(carr_x0[i]));
 	/* release the C array */
 	free(carr_x0);
 	RETVAL = newSViv(s);
+    OUTPUT:
+        RETVAL
+
+void*
+logging_prgr_cb_ptr()
+    CODE:
+        RETVAL = &logging_prgr_cb;
+    OUTPUT:
+        RETVAL
+
+void*
+verbose_prgr_cb_ptr()
+    CODE:
+        RETVAL = &verbose_prgr_cb;
     OUTPUT:
         RETVAL
 
