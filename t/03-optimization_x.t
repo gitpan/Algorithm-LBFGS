@@ -4,7 +4,7 @@ use warnings;
 use Test::More;
 use Test::Number::Delta within => 1e-5;
 
-eval "use Inline";
+eval "require Inline::C";
 $@
     ? plan skip_all => 'Inline::C is required for running this test'
     : plan tests => 5;

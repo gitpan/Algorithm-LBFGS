@@ -15,7 +15,7 @@ include         'Test::Number::Delta';
 auto_install;
 
 WriteMakefile(
-    LIBS              => ['-lm'],
+    LIBS              => [],
     INC               => '-I.',
     OBJECT            => '$(O_FILES)'
 );

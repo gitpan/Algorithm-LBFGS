@@ -5,7 +5,7 @@ use warnings;
 
 use XSLoader;
 
-our $VERSION = '0.171';
+our $VERSION = '0.172';
 XSLoader::load('Algorithm::LBFGS', $VERSION);
 
 # constructor
