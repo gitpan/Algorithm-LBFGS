@@ -330,10 +330,9 @@ do_lbfgs(param, instance, x0)
 	else
 	    prgr_cb_ptr = NULL;
 	/* call L-BFGS */
-	s = lbfgs(n, carr_x0, NULL, 
-                  eval_cb_ptr, prgr_cb_ptr,
+	s = lbfgs(n, carr_x0, NULL, eval_cb_ptr, prgr_cb_ptr,
 		  &(((SV**)instance)[2]), (lbfgs_parameter_t*)param);
-        /* store the result back to the Perl array ref x0 */
+    /* store the result back to the Perl array ref x0 */
 	for (i = 0; i < n; i++) av_store(av_x0, i, newSVnv(carr_x0[i]));
 	/* release the C array */
 	free(carr_x0);

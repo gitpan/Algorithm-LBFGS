@@ -1,7 +1,10 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.173 Tue Apr  8 19:39:00 2008
+    - Still trying ...
+
 0.172 Sun Mar 16 16:15:00 2008
-        - try to fix a bug in the test suite
+    - try to fix a bug in the test suite
 	- remove the -lm in Makefile.PL
 
 0.171 Tue Mar 12 16:49:00 2008

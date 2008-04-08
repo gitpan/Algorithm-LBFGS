@@ -4,12 +4,12 @@ use warnings;
 use Test::More;
 use Test::Number::Delta within => 1e-5;
 
-eval "require Inline::C";
+eval "use Inline 'C' => 'void a() {}'";
 $@
     ? plan skip_all => 'Inline::C is required for running this test'
     : plan tests => 5;
 
-use Inline 'C';
+use Inline 'C' => 'DATA';
 
 my $__;
 sub NAME { $__ = shift };
