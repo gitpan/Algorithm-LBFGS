@@ -4,8 +4,8 @@ use warnings;
 use Test::More;
 use Test::Number::Delta within => 1e-5;
 
-BEGIN { eval "require Inline::C" }
-$@ ? plan skip_all => 'Inline::C is required for running this test'
+eval("use Inline C => 'int a() { return 123; }'; a();") != 123
+   ? plan skip_all => 'Inline::C is required for running this test'
    : plan tests => 5;
 
 use Inline 'C' => 'DATA';
