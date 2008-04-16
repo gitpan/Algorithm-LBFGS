@@ -4,11 +4,9 @@ use warnings;
 use Test::More;
 use Test::Number::Delta within => 1e-5;
 
-eval("use Inline C => 'int a() { return 123; }'; a();") != 123
+eval { use Inline 'C' => 'DATA'; inline_ok(); } != 123
    ? plan skip_all => 'Inline::C is required for running this test'
    : plan tests => 5;
-
-use Inline 'C' => 'DATA';
 
 my $__;
 sub NAME { $__ = shift };
@@ -61,6 +59,8 @@ NAME 'A high dimension optimization (100,000 dimensions) - external';
 
 __END__
 __C__
+
+int inline_ok() { return 123; }
 
 #define EVAL_FUNC(name) \
     double name ( \
