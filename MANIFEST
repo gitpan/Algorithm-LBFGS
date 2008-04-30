@@ -3,6 +3,11 @@ arithmetic_ansi.h
 arithmetic_sse_double.h
 arithmetic_sse_float.h
 Changes
+inc/Inline.pm
+inc/Inline/C.pm
+inc/Inline/C/ParseRecDescent.pm
+inc/Inline/denter.pm
+inc/Inline/MakeMaker.pm
 inc/Module/AutoInstall.pm
 inc/Module/Install.pm
 inc/Module/Install/AutoInstall.pm

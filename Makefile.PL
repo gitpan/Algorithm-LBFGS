@@ -12,6 +12,12 @@ include         'Test::Builder::Module';
 include         'Test::More';
 include         'Test::Number::Delta';
 
+include         'Inline';
+include         'Inline::C';
+include         'Inline::C::ParseRecDescent';
+include         'Inline::MakeMaker';
+include         'Inline::denter';
+
 auto_install;
 
 WriteMakefile(

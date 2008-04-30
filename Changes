@@ -1,5 +1,8 @@
 Revision history for Perl extension Algorithm::LBFGS.
 
+0.177 Wed Apr 30 16:32:00 2008
+   -  bundle Inline::C 0.44
+
 0.176 Wed Apr 16 12:20:00 2008
     - Still trying ...
 
